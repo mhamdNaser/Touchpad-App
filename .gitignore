@@ -1,0 +1,86 @@
+# ==============================
+# 📦 Common
+# ==============================
+.DS_Store
+Thumbs.db
+.env
+*.env
+__pycache__/
+*.py[cod]
+*.log
+*.sqlite3
+*.db
+*.pyc
+*.pyo
+*.pyd
+
+# ==============================
+# 🐍 Python / FastAPI backend
+# ==============================
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+# Build and cache
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==============================
+# ⚛️ React + Electron frontend
+# ==============================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build output
+dist/
+build/
+out/
+coverage/
+
+# Electron specific
+*.asar
+*.exe
+*.dmg
+*.app
+*.msi
+
+# ==============================
+# 🧠 ML / AI files (optional)
+# ==============================
+*.pt
+*.pth
+*.h5
+*.pkl
+*.joblib
+*.onnx
+*.bin
+
+# ==============================
+# 🧰 OS & Misc
+# ==============================
+*.bak
+*.tmp
+*.temp
+*.log
+*.cache
