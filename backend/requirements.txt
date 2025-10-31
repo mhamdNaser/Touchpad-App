@@ -1,1 +1,21 @@
-# 
+# main library for FastApi run command line ' pip install '
+
+fastapi 
+uvicorn[standard] 
+sqlalchemy 
+pydantic 
+email-validator 
+python-multipart
+
+# main library for AI run command line ' pip install '
+
+torch 
+transformers 
+scikit-learn 
+numpy
+
+###########################################
+##  Activate a virtual work environment  ##
+###########################################
+
+# backend\venv\Scripts\activate
