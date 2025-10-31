@@ -14,8 +14,22 @@ transformers
 scikit-learn 
 numpy
 
+# main library for Database run command line ' pip install '
+sqlalchemy 
+pymysql 
+mysqlclient
+
+
+
 ###########################################
 ##  Activate a virtual work environment  ##
 ###########################################
 
-# backend\venv\Scripts\activate
+###### in backend directory run this command line to creat environment and run 
+
+# python -m venv venv
+# venv\Scripts\activate
+
+###### to run FastApi server 
+
+# uvicorn app.main:app --reload

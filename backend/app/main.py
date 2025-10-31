@@ -1,21 +1,25 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api import routes_gestures
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
+from app.core.database import SessionLocal, engine
+from app.models import gesture, frame, point
 
-app = FastAPI(title="Touchpad Gesture Recognition API")
+# إنشاء الجداول في حال غير موجودة (اختياري)
+gesture.Base.metadata.create_all(bind=engine)
 
-# السماح للواجهة بالتواصل (React/Electron)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # عدلها لاحقًا للأمان
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI()
 
-# ربط المسارات
-app.include_router(routes_gestures.router, prefix="/api/v1/gestures", tags=["Gestures"])
+# دالة تعتمد على Session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.get("/")
-def read_root():
-    return {"message": "API is running"}
+@app.get("/gestures")
+def get_gestures(db: Session = Depends(get_db)):
+    gestures = db.query(gesture.Gesture).limit(10).all()
+    return [
+        {"id": g.id, "character": g.character, "duration_ms": g.duration_ms}
+        for g in gestures
+    ]
