@@ -6,6 +6,7 @@ sqlalchemy
 pydantic 
 email-validator 
 python-multipart
+python-dotenv
 
 # main library for AI run command line ' pip install '
 
