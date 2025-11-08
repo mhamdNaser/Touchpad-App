@@ -1,63 +1,110 @@
 # app/services/training_pipeline.py
+
+import json
+import numpy as np
+from typing import List
 from app.services.data_loader import DataLoader
 from app.services.features import FeatureEngineer
 from app.services.data_splitter import DataSplitter
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
-import joblib
-import json
+
+from sklearn.metrics import classification_report, accuracy_score
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.optimizers import Adam
 
 class TrainingPipeline:
     def __init__(self, db):
         self.db = db
         self.data_loader = DataLoader(db)
-        self.feature_engineer = FeatureEngineer()
+        self.feature_engineer = FeatureEngineer(max_timesteps=100)
         self.data_splitter = DataSplitter()
-    
+
+    def build_lstm_model(self, input_shape, num_classes):
+        model = Sequential([
+            LSTM(128, input_shape=input_shape, return_sequences=True),
+            BatchNormalization(),
+            Dropout(0.3),
+
+            LSTM(64),
+            BatchNormalization(),
+            Dropout(0.3),
+
+            Dense(64, activation='relu'),
+            Dropout(0.2),
+
+            Dense(num_classes, activation='softmax')
+        ])
+
+        model.compile(
+            loss='categorical_crossentropy',
+            optimizer=Adam(learning_rate=0.001),
+            metrics=['accuracy']
+        )
+        return model
+
     def train_model(self, characters: List[str]):
-        """
-        خطوات التدريب الكاملة
-        """
-        print("🎯 بداية تدريب النموذج...")
-        
-        # 1. تحميل البيانات
-        print("📥 جلب البيانات من قاعدة البيانات...")
+        print("Starting LSTM training pipeline...")
+
         gestures_data = self.data_loader.load_gestures_data(characters)
-        print(f"تم تحميل {len(gestures_data)} إيماءة")
-        
-        # 2. استخراج الميزات
-        print("🔧 استخراج الميزات...")
-        features, labels = self.feature_engineer.extract_features(gestures_data)
-        print(f"الأبعاد: {features.shape}")
-        
-        # 3. تقسيم البيانات
-        print("📊 تقسيم البيانات...")
-        X_train, X_val, X_test, y_train, y_val, y_test = self.data_splitter.split_data(features, labels)
-        
-        split_info = self.data_splitter.get_split_info(y_train, y_val, y_test)
-        print("معلومات التقسيم:")
+        print(f"Loaded {len(gestures_data)} gestures")
+
+        X, y = self.feature_engineer.extract_features(gestures_data)
+        print(f"Data shape: {X.shape}, number of classes: {len(np.unique(y))}")
+
+        X_train, X_val, X_test, y_train, y_val, y_test = self.data_splitter.split_data(X, y)
+        split_info = self._convert_split_info_to_int(
+            self.data_splitter.get_split_info(y_train, y_val, y_test)
+        )
         print(json.dumps(split_info, indent=2, ensure_ascii=False))
-        
-        # 4. تدريب النموذج (مثال باستخدام RandomForest)
-        print("🤖 تدريب النموذج...")
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X_train, y_train)
-        
-        # 5. التقيم
-        print("📈 تقييم النموذج...")
-        train_accuracy = accuracy_score(y_train, model.predict(X_train))
-        val_accuracy = accuracy_score(y_val, model.predict(X_val))
-        
-        print(f"دقة التدريب: {train_accuracy:.3f}")
-        print(f"دقة التحقق: {val_accuracy:.3f}")
-        
-        # 6. حفظ النموذج
-        print("💾 حفظ النموذج...")
-        joblib.dump(model, 'arabic_gesture_model.pkl')
-        
+
+        num_classes = len(np.unique(y))
+        y_train_cat = to_categorical(y_train, num_classes)
+        y_val_cat = to_categorical(y_val, num_classes)
+        y_test_cat = to_categorical(y_test, num_classes)
+
+        input_shape = (X_train.shape[1], X_train.shape[2])
+        model = self.build_lstm_model(input_shape, num_classes)
+        model.summary()
+
+        early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+        checkpoint = ModelCheckpoint(
+            filepath='arabic_gesture_lstm_best.h5',
+            monitor='val_accuracy',
+            save_best_only=True,
+            verbose=1
+        )
+
+        history = model.fit(
+            X_train, y_train_cat,
+            validation_data=(X_val, y_val_cat),
+            epochs=100,
+            batch_size=32,
+            callbacks=[early_stop, checkpoint],
+            verbose=1
+        )
+
+        test_loss, test_acc = model.evaluate(X_test, y_test_cat, verbose=0)
+        print(f"Test accuracy: {test_acc:.3f}")
+
+        y_pred = np.argmax(model.predict(X_test), axis=1)
+        print(classification_report(y_test, y_pred, zero_division=0))
+
+        model.save("arabic_gesture_lstm_final.h5")
+
         return {
             'model': model,
-            'train_accuracy': train_accuracy,
-            'val_accuracy': val_accuracy,
+            'test_accuracy': float(test_acc),
             'split_info': split_info
+        }
+
+    def _convert_split_info_to_int(self, split_info: dict) -> dict:
+        return {
+            'train_samples': split_info['train_samples'],
+            'val_samples': split_info['val_samples'],
+            'test_samples': split_info['test_samples'],
+            'train_distribution': {int(k): int(v) for k, v in split_info['train_distribution'].items()},
+            'val_distribution': {int(k): int(v) for k, v in split_info['val_distribution'].items()},
+            'test_distribution': {int(k): int(v) for k, v in split_info['test_distribution'].items()}
         }

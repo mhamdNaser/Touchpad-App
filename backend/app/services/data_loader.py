@@ -44,6 +44,7 @@ class DataLoader:
                     if gesture_data:
                         gestures_data.append(gesture_data)
                         loaded_count += 1
+                        print(f"Loaded {loaded_count}/{limit_per_char} gestures for '{char}'")
 
                 offset += batch_size
 

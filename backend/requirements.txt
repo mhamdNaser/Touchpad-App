@@ -28,9 +28,19 @@ mysqlclient
 
 ###### in backend directory run this command line to creat environment and run 
 
-# python -m venv venv
-# venv\Scripts\activate
+python -m venv venv
+venv\Scripts\activate
 
 ###### to run FastApi server 
 
-# uvicorn app.main:app --reload
+uvicorn app.main:app --reload
+
+
+###### to run training or testing from main file 
+
+python -m app.main
+
+
+pip install fastapi uvicorn[standard] sqlalchemy pydantic email-validator python-multipart python-dotenv
+pip install torch transformers scikit-learn numpy
+pip install sqlalchemy pymysql mysqlclient

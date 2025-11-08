@@ -1,39 +1,60 @@
 from app.services.data_loader import DataLoader
 from app.services.features import FeatureEngineer
+from app.services.training_pipeline import TrainingPipeline
 from app.core.database import SessionLocal
 import numpy as np
 import pprint
 
-def main():
+def main(mode="train"):
+    """
+    mode: "train" لتدريب النموذج
+          "test" لتقييم النموذج على بيانات الاختبار
+    """
     db = SessionLocal()
     loader = DataLoader(db)
     features_extractor = FeatureEngineer()
 
-    # Load gestures for two characters ('ا' and 'ب')
-    data = loader.load_gestures_data(["ا", "ب"], limit_per_char=10)  # Use 10 for testing
+    # 1️⃣ تحميل البيانات
+    characters = ["ا", "ب"]  # مثال لتجربة
+    data = loader.load_gestures_data(characters, limit_per_char=50)
+    print(f"✅ Loaded {len(data)} gestures\n")
 
-    print(f"Loaded {len(data)} gestures\n")
-
-    # Extract features
+    # 2️⃣ استخراج الميزات
     X, y = features_extractor.extract_features(data)
+    print(f"🔹 Feature dimensions: X={X.shape}, y={y.shape}")
 
-    print("🔹 Feature dimensions:")
-    print(f"X shape: {X.shape}")  # (number of samples, number of features)
-    print(f"y shape: {y.shape}")  # (number of samples, )
+    # 3️⃣ اختيار الوضع
+    if mode == "train":
+        print("\n🎯 Starting training pipeline...")
+        pipeline = TrainingPipeline(db)
+        result = pipeline.train_model(characters)
+        print(f"Training completed. Test accuracy: {result['test_accuracy']:.3f}")
+    
+    elif mode == "test":
+        print("\n🧪 Running testing on saved model...")
+        from tensorflow.keras.models import load_model
+        from tensorflow.keras.utils import to_categorical
+        from sklearn.metrics import accuracy_score, classification_report
 
-    # Check data types
-    print(f"X dtype: {X.dtype}, y dtype: {y.dtype}")
+        model = load_model("arabic_gesture_lstm_final.h5")
+        num_classes = len(np.unique(y))
+        y_cat = to_categorical(y, num_classes)
 
-    # Show the first sample to inspect values
-    print("\nFirst gesture example after feature extraction:")
-    pprint.pprint(X[0])
-    print("Label:", y[0])
+        y_pred_prob = model.predict(X)
+        y_pred = np.argmax(y_pred_prob, axis=1)
 
-    # Additional check: verify no NaN values
-    if np.isnan(X).any():
-        print("⚠️ NaN values found in features!")
+        acc = accuracy_score(y, y_pred)
+        print(f"✅ Test accuracy: {acc:.3f}")
+
+        print("\n📊 Classification report:")
+        print(classification_report(y, y_pred, zero_division=0))
+
     else:
-        print("✅ No NaN values in features.")
+        print("❌ Invalid mode. Use 'train' or 'test'.")
 
 if __name__ == "__main__":
-    main()
+    # لتشغيل التدريب:
+    # main("train")
+    # لتشغيل الاختبار:
+    main("test")
+    # main("train")

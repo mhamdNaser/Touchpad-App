@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import axios from "axios";
-import { toast } from "react-toastify";
 import simplify from "simplify-js";
+import { toast } from "react-toastify";
 
-export default function useTouchSimulator(
-  canvasRef,
-  previewCanvasRef,
-  endpoint,
-  selectedChar,
-  penColor
-) {
+export default function useTouchPredictor(canvasRef, previewCanvasRef, endpoint, character, penColor) {
   const pointers = useRef(new Map());
   const gestureFrames = useRef([]);
   const [payloadPreview, setPayloadPreview] = useState(null);
   const [hoverPosition, setHoverPosition] = useState(null);
+  const [prediction, setPrediction] = useState(null);
   let nextId = useRef(1);
 
   const activePathsRef = useRef(new Map());
@@ -21,50 +16,62 @@ export default function useTouchSimulator(
 
   const clearCanvasState = () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const previewCanvas = previewCanvasRef.current;
+    
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    
+    if (previewCanvas) {
+      const previewCtx = previewCanvas.getContext("2d");
+      previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    }
+    
     activePathsRef.current.clear();
     completedPathsRef.current = [];
     pointers.current.clear();
     gestureFrames.current = [];
     setPayloadPreview(null);
     setHoverPosition(null);
-    nextId.current = 1; // 💡 ربما تريد إعادة تعيين الـ id أيضاً
+    setPrediction(null);
+    nextId.current = 1;
   };
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const color = penColor
     if (!canvas) return;
-
     const ctx = canvas.getContext("2d");
     canvas.style.touchAction = "none";
 
     ctx.lineWidth = 6;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = penColor;
 
     const redraw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+      // رسم المسارات المكتملة
       for (const pts of completedPathsRef.current) {
-        const smooth = simplify(pts, 10, true);
-        ctx.beginPath();
-        ctx.moveTo(smooth[0].x, smooth[0].y);
-        for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i].x, smooth[i].y);
-        ctx.stroke();
+        if (pts.length > 0) {
+          const smooth = simplify(pts, 10, true);
+          ctx.beginPath();
+          ctx.moveTo(smooth[0].x, smooth[0].y);
+          for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i].x, smooth[i].y);
+          ctx.stroke();
+        }
       }
 
-      // نرسم المسارات النشطة
+      // رسم المسارات النشطة
       for (const [, pts] of activePathsRef.current.entries()) {
-        const smooth = simplify(pts, 4, true);
-        ctx.beginPath();
-        ctx.moveTo(smooth[0].x, smooth[0].y);
-        for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i].x, smooth[i].y);
-        ctx.stroke();
+        if (pts.length > 0) {
+          const smooth = simplify(pts, 4, true);
+          ctx.beginPath();
+          ctx.moveTo(smooth[0].x, smooth[0].y);
+          for (let i = 1; i < smooth.length; i++) ctx.lineTo(smooth[i].x, smooth[i].y);
+          ctx.stroke();
+        }
       }
     };
 
@@ -87,19 +94,11 @@ export default function useTouchSimulator(
     };
 
     const pointerDown = (e) => {
-      if (!selectedChar) {
-        toast.warn("يرجى اختيار الحرف أولاً ⚠️");
-        return;
-      }
-
+      e.preventDefault();
       e.target.setPointerCapture(e.pointerId);
-      const canvas = canvasRef.current;
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-
-      const x = (e.clientX - rect.left) * scaleX;
-      const y = (e.clientY - rect.top) * scaleY;
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
       const id = nextId.current++;
       const point = { id, x, y, state: "down" };
@@ -111,13 +110,10 @@ export default function useTouchSimulator(
     };
 
     const pointerMove = (e) => {
-      const canvas = canvasRef.current;
+      e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-
-      const x = (e.clientX - rect.left) * scaleX;
-      const y = (e.clientY - rect.top) * scaleY;
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
       setHoverPosition({ x, y });
 
@@ -135,14 +131,11 @@ export default function useTouchSimulator(
       recordFrame();
     };
 
-    const pointerUp = (e) => {
-      const canvas = canvasRef.current;
+    const pointerUp = async (e) => {
+      e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-
-      const x = (e.clientX - rect.left) * scaleX;
-      const y = (e.clientY - rect.top) * scaleY;
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
       if (!pointers.current.has(e.pointerId)) return;
 
@@ -160,79 +153,90 @@ export default function useTouchSimulator(
       pointers.current.delete(e.pointerId);
       activePathsRef.current.delete(e.pointerId);
       redraw();
+
+      // إرسال البيانات تلقائيًا بعد انتهاء الإيماءة
+      await sendGesture();
     };
 
     canvas.addEventListener("pointerdown", pointerDown);
     canvas.addEventListener("pointermove", pointerMove);
     canvas.addEventListener("pointerup", pointerUp);
-    canvas.addEventListener("pointerleave", () => {
-      pointers.current.clear();
-      activePathsRef.current.clear();
+    canvas.addEventListener("pointercancel", pointerUp);
+    
+    canvas.addEventListener("pointerleave", (e) => {
+      if (pointers.current.has(e.pointerId)) {
+        pointerUp(e);
+      }
       setHoverPosition(null);
-      redraw();
     });
 
     return () => {
       canvas.removeEventListener("pointerdown", pointerDown);
       canvas.removeEventListener("pointermove", pointerMove);
       canvas.removeEventListener("pointerup", pointerUp);
+      canvas.removeEventListener("pointercancel", pointerUp);
+      canvas.removeEventListener("pointerleave", pointerUp);
     };
-  }, [endpoint, selectedChar]);
-
-
+  }, [penColor]);
 
   const sendGesture = async () => {
-    if (!selectedChar || gestureFrames.current.length === 0) return;
-
-    // استخراج الإطارات الحقيقية التي تم جمعها
-    const framesToSend = gestureFrames.current;
-
-    // التأكد من وجود إطارات
-    if (framesToSend.length === 0) {
-      console.log("No frames to send.");
+    if (gestureFrames.current.length === 0) {
+      console.log("No gesture data to send");
       return;
     }
 
+    const framesToSend = [...gestureFrames.current];
     const startTime = framesToSend[0].ts;
     const endTime = framesToSend.at(-1).ts;
 
     const payload = {
-      character: selectedChar?.value || "",
       start_time: startTime,
       end_time: endTime,
-      duration_ms: endTime - startTime, // مدة زمنية حقيقية
-      frame_count: framesToSend.length, // عدد إطارات حقيقي
-      frames: framesToSend, // إرسال الإطارات الأصلية
+      duration_ms: endTime - startTime,
+      frame_count: framesToSend.length,
+      frames: framesToSend,
     };
 
-    // هذا سيعرض البيانات الحقيقية في واجهتك
     setPayloadPreview(payload);
 
     try {
+      console.log("Sending gesture data:", payload);
+      
       const res = await axios.post(endpoint, payload, {
         headers: { "Content-Type": "application/json" },
       });
-      toast.success(res?.data?.message || "Gesture saved successfully");
-      console.log("✅ Gesture sent successfully:", res.data);
+      
+      console.log("✅ Prediction Response:", res.data);
+      setPrediction(res.data);
+      
+      // عرض النتائج في الكونسول
+      if (res.data.predicted_class) {
+        console.log("🎯 Predicted Class:", res.data.predicted_class);
+      }
+      if (res.data.probabilities) {
+        console.log("📊 Probabilities:", res.data.probabilities);
+      }
+      
     } catch (err) {
-      toast.error(
-        err.response?.data?.message || "Failed to send gesture to the server."
-      );
-      console.error("❌ Send gesture failed:", err);
+      console.error("❌ Prediction failed:", err);
+      if (err.response) {
+        console.error("Response data:", err.response.data);
+        console.error("Response status:", err.response.status);
+      }
     }
 
-    // تفريغ الإطارات بعد الإرسال
     gestureFrames.current = [];
     const previewCanvas = previewCanvasRef.current;
-    if (previewCanvas)
+    if (previewCanvas) {
       previewCanvas.getContext("2d").clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    }
   };
 
-
-  const handleClearCanvas = async () => {
-    clearCanvasState();
-    toast.info("تم مسح اللوحة وإعادة تصفير البيانات بنجاح.");
-  }
-
-  return { payloadPreview, hoverPosition, sendGesture, clearCanves: handleClearCanvas };
+  return { 
+    sendGesture, 
+    clearCanvas: clearCanvasState, 
+    payloadPreview, 
+    hoverPosition,
+    prediction 
+  };
 }
