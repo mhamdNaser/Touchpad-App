@@ -1,6 +1,7 @@
 # app/services/training_pipeline.py
 
 import json
+import pickle
 import numpy as np
 from typing import List
 from app.services.data_loader import DataLoader
@@ -92,6 +93,9 @@ class TrainingPipeline:
         print(classification_report(y_test, y_pred, zero_division=0))
 
         model.save("arabic_gesture_lstm_final.h5")
+
+        with open("scaler.pkl", "wb") as f:
+            pickle.dump(self.feature_engineer.scaler, f)
 
         return {
             'model': model,

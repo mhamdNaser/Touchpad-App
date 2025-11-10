@@ -15,7 +15,7 @@ def main(mode="train"):
     features_extractor = FeatureEngineer()
 
     # 1️⃣ تحميل البيانات
-    characters = ["ا", "ب"]  # مثال لتجربة
+    characters = ["ا", "ب", "ت"]  # مثال لتجربة
     data = loader.load_gestures_data(characters, limit_per_char=50)
     print(f"✅ Loaded {len(data)} gestures\n")
 
@@ -53,8 +53,6 @@ def main(mode="train"):
         print("❌ Invalid mode. Use 'train' or 'test'.")
 
 if __name__ == "__main__":
-    # لتشغيل التدريب:
-    # main("train")
-    # لتشغيل الاختبار:
-    main("test")
-    # main("train")
+    import sys
+    mode = sys.argv[1] if len(sys.argv) > 1 else "train"
+    main(mode)

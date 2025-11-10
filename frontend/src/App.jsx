@@ -12,7 +12,6 @@ import {
 
 const defaultWidth = 1280;
 const defaultHeight = 800;
-const DEFAULT_ENDPOINT = "/predict"; // تأكد من هذا المسار
 
 export default function DrowerLayout() {
   const [isFullScreen, setIsFullScreen] = useState(false);
@@ -23,10 +22,9 @@ export default function DrowerLayout() {
   const previewCanvasRef = useRef();
   const containerRef = useRef();
 
-  const { sendGesture, clearCanvas, payloadPreview, hoverPosition, prediction } = useTouchPredictor(
+  const { sendGesture, clearCanves, prediction } = useTouchPredictor(
     canvasRef,
     previewCanvasRef,
-    DEFAULT_ENDPOINT,
     null, // لا حرف محدد - رسم حر
     penColor
   );
@@ -50,7 +48,7 @@ export default function DrowerLayout() {
 
   // دالة مسح محسنة
   const handleClearCanvas = () => {
-    clearCanvas();
+    clearCanves();
     console.log("🧹 Canvas cleared");
   };
 

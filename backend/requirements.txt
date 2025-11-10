@@ -33,12 +33,13 @@ venv\Scripts\activate
 
 ###### to run FastApi server 
 
-uvicorn app.main:app --reload
+uvicorn main:app --reload
 
 
 ###### to run training or testing from main file 
 
-python -m app.main
+python -m app.train_main train
+python -m app.train_main test
 
 
 pip install fastapi uvicorn[standard] sqlalchemy pydantic email-validator python-multipart python-dotenv
