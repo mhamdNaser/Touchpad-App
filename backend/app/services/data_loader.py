@@ -4,44 +4,46 @@ from app.services.preprocess import Preprocessor
 
 class DataLoader:
     def __init__(self, api_url: str = "https://api.sydev.site/api/gestures"):
-        """
-        تحميل بيانات الإيماءات من API خارجي بدل قاعدة البيانات.
-        """
         self.api_url = api_url
         self.preprocessor = Preprocessor()
 
     def load_gestures_data(self, characters: List[str], limit_per_char: int = 200) -> List[Dict]:
         """
-        تحميل بيانات الإيماءات من API وتصفيتها حسب الحروف المطلوبة.
+        تحميل بيانات الإيماءات من API مع معالجة المفتاح "data"
         """
         gestures_data = []
+        print(f"Fetching gestures from API: {self.api_url}")
 
         try:
-            # 1️⃣ جلب جميع الجستشر من الـ API
-            print(f"Fetching gestures from API: {self.api_url}")
             response = requests.get(self.api_url)
             response.raise_for_status()
 
-            data = response.json()
+            all_gestures = response.json()
 
-            # بعض الـ API ترجع {"data": [...]}، لذا نتحقق
-            gestures = data.get("data", data)
+            # ✅ استخدم مفتاح "data" إذا موجود
+            if isinstance(all_gestures, dict) and "data" in all_gestures:
+                all_gestures = all_gestures["data"]
 
-            # 2️⃣ تصفية الجستشر حسب الحروف المطلوبة
+            print(f"✅ API returned {len(all_gestures)} gestures")
+
+            # تصفية وتحويل لكل حرف
             for char in characters:
-                filtered = [g for g in gestures if g.get("character") == char]
-                limited = filtered[:limit_per_char]
+                char_gestures = [g for g in all_gestures if g.get('character') == char]
+                char_gestures = char_gestures[:limit_per_char]
 
-                for i, gesture in enumerate(limited, start=1):
+                for gesture in char_gestures:
                     gesture_data = self.preprocessor.process_gesture(gesture)
                     if gesture_data:
                         gestures_data.append(gesture_data)
-                        print(f"Loaded {i}/{limit_per_char} gestures for '{char}'")
 
-        except requests.exceptions.RequestException as e:
+                print(f"✅ Loaded {len(char_gestures)} gestures for '{char}'")
+
+        except Exception as e:
             print(f"❌ Error fetching data from API: {e}")
 
         return gestures_data
+
+
 
 
 

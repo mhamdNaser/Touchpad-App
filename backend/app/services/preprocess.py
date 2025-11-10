@@ -1,18 +1,14 @@
 from typing import Dict, Any, List
 
-#################################
-##   Data Preprocessing Step   ##
-#################################
 class Preprocessor:
     def __init__(self):
         pass
 
     def process_gesture(self, gesture: Dict[str, Any]) -> Dict:
         """
-        معالجة إيماءة واحدة قادمة من API وتحويلها إلى تنسيق مناسب للتدريب
+        تحويل إيماءة واحدة إلى تنسيق جاهز للـ FeatureEngineer
         """
         try:
-            # تأكيد وجود الحقول الأساسية
             gesture_id = gesture.get("id")
             character = gesture.get("character")
             duration_ms = gesture.get("duration_ms", 0)
@@ -20,10 +16,9 @@ class Preprocessor:
             frames = gesture.get("frames", [])
 
             if not frames:
-                print(f"⚠️ Gesture {gesture_id} has no frames, skipped.")
                 return None
 
-            # فرز الفريمات حسب frame_id أو id حسب المتاح
+            # فرز الفريمات حسب frame_id
             sorted_frames = sorted(frames, key=lambda f: f.get("frame_id", f.get("id", 0)))
 
             frames_data: List[Dict] = []
@@ -40,7 +35,6 @@ class Preprocessor:
                 }
 
                 for pt in points:
-                    # بعض الـ API قد تحتوي أسماء مختلفة أو ناقصة
                     frame_data["points"].append({
                         "x": pt.get("x", 0.0),
                         "y": pt.get("y", 0.0),
@@ -61,6 +55,8 @@ class Preprocessor:
         except Exception as e:
             print(f"❌ Error processing gesture: {e}")
             return None
+
+
 
 
 

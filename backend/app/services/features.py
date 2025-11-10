@@ -1,8 +1,8 @@
+# app/services/features.py
 import numpy as np
 import pandas as pd
 from typing import List, Dict
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from collections import defaultdict
 
 class FeatureEngineer:
     def __init__(self, max_timesteps: int = 100):
@@ -10,40 +10,7 @@ class FeatureEngineer:
         self.label_encoder = LabelEncoder()
         self.max_timesteps = max_timesteps
 
-    ###############################################
-    ##        الخطوة 1: استخراج الفيتشر          ##
-    ###############################################
-    def extract_features(self, gestures_data: List[Dict]) -> tuple:
-        features = []
-        labels = []
-
-        for gesture in gestures_data:
-            sequence = self.extract_sequence_features(gesture)
-            if sequence is not None:
-                features.append(sequence)
-                labels.append(gesture['character'])
-
-        X = np.array(features)
-        y = np.array(labels)
-
-        if len(X.shape) < 3:
-            print("⚠️ لا توجد بيانات كافية لاستخراج الميزات.")
-            return None, None
-
-        # تطبيع القيم
-        n_samples, timesteps, n_features = X.shape
-        X_reshaped = X.reshape(-1, n_features)
-        X_scaled = self.scaler.fit_transform(X_reshaped)
-        X = X_scaled.reshape(n_samples, timesteps, n_features)
-
-        # ترميز الأحرف
-        y_encoded = self.label_encoder.fit_transform(y)
-
-        return X, y_encoded
-
-    ###############################################
-    ##    الخطوة 2: استخراج الميزات لكل فريم      ##
-    ###############################################
+    # ===== دوال LSTM =====
     def extract_sequence_features(self, gesture: Dict) -> np.ndarray:
         frames = gesture.get('frames', [])
         if not frames:
@@ -73,52 +40,94 @@ class FeatureEngineer:
         feature_dim = len(sequence[0])
         if len(sequence) < self.max_timesteps:
             pad_len = self.max_timesteps - len(sequence)
-            sequence.extend([[0] * feature_dim] * pad_len)
+            sequence.extend([[0]*feature_dim]*pad_len)
         else:
             sequence = sequence[:self.max_timesteps]
 
         return np.array(sequence)
 
-    ###############################################
-    ##   الخطوة 3: تجميع الفيتشر لكل حرف         ##
-    ###############################################
-    def aggregate_by_character(self, gestures_data: List[Dict]) -> Dict[str, np.ndarray]:
-        char_features = defaultdict(list)
+    def extract_features(self, gestures_data: List[Dict]):
+        features = []
+        labels = []
 
         for gesture in gestures_data:
             seq = self.extract_sequence_features(gesture)
             if seq is not None:
-                flat = np.mean(seq, axis=0)
-                char_features[gesture['character']].append(flat)
+                features.append(seq)
+                labels.append(gesture['character'])
 
-        aggregated = {}
-        for char, feats in char_features.items():
-            aggregated[char] = np.mean(np.stack(feats), axis=0)
+        X = np.array(features)
+        y = np.array(labels)
 
-        return aggregated
+        # تطبيع الميزات
+        n_samples, timesteps, n_features = X.shape
+        X_reshaped = X.reshape(-1, n_features)
+        X_scaled = self.scaler.fit_transform(X_reshaped)
+        X = X_scaled.reshape(n_samples, timesteps, n_features)
 
-    ###############################################
-    ##   الخطوة 4: طباعة الفيتشر في شكل جدول     ##
-    ###############################################
-    def show_feature_table(self, aggregated_features: Dict[str, np.ndarray]):
+        # ترميز الأحرف
+        y_encoded = self.label_encoder.fit_transform(y)
+
+        return X, y_encoded
+
+    # ===== دوال تحليل الفيتشر لكل حرف =====
+    def aggregate_by_character(self, gestures_data: List[Dict]) -> Dict:
         """
-        طباعة الفيتشر المجمعة لكل حرف في شكل جدول باستخدام pandas
+        تجميع الفيتشر لكل حرف لحساب المتوسط والانحراف المعياري
         """
-        feature_names = [
-            "mean_x", "std_x",
-            "mean_y", "std_y",
-            "mean_pressure", "std_pressure",
-            "points_count"
-        ]
+        agg = {}
+        for gesture in gestures_data:
+            char = gesture['character']
+            if char not in agg:
+                agg[char] = {
+                    'mean_x': [], 'std_x': [],
+                    'mean_y': [], 'std_y': [],
+                    'mean_pressure': [], 'std_pressure': [],
+                    'points_count': []
+                }
 
-        df = pd.DataFrame.from_dict(aggregated_features, orient='index', columns=feature_names)
-        df.index.name = "Character"
+            for frame in gesture.get('frames', []):
+                points = frame.get('points', [])
+                if not points:
+                    continue
+                x_coords = [p.get('x', 0.0) for p in points]
+                y_coords = [p.get('y', 0.0) for p in points]
+                pressure = [p.get('pressure', 0.0) for p in points]
 
+                agg[char]['mean_x'].append(np.mean(x_coords))
+                agg[char]['std_x'].append(np.std(x_coords))
+                agg[char]['mean_y'].append(np.mean(y_coords))
+                agg[char]['std_y'].append(np.std(y_coords))
+                agg[char]['mean_pressure'].append(np.mean(pressure))
+                agg[char]['std_pressure'].append(np.std(pressure))
+                agg[char]['points_count'].append(len(points))
+
+        return agg
+
+    def show_feature_table(self, aggregated_features: Dict) -> pd.DataFrame:
+        """
+        إنشاء جدول تحليلي للفيتشر لكل حرف
+        """
+        rows = []
+        for char, feats in aggregated_features.items():
+            rows.append({
+                'Character': char,
+                'mean_x': np.mean(feats['mean_x']),
+                'std_x': np.mean(feats['std_x']),
+                'mean_y': np.mean(feats['mean_y']),
+                'std_y': np.mean(feats['std_y']),
+                'mean_pressure': np.mean(feats['mean_pressure']),
+                'std_pressure': np.mean(feats['std_pressure']),
+                'points_count': np.mean(feats['points_count'])
+            })
+        df = pd.DataFrame(rows).set_index('Character')
         print("\n================= 📊 FEATURE TABLE =================\n")
-        print(df.round(3))
+        print(df)
         print("\n====================================================\n")
-
         return df
+
+
+
 
 
 # import numpy as np

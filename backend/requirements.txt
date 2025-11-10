@@ -14,6 +14,7 @@ torch
 transformers 
 scikit-learn 
 numpy
+tensorflow
 
 # main library for Database run command line ' pip install '
 sqlalchemy 
@@ -38,10 +39,11 @@ uvicorn main:app --reload
 
 ###### to run training or testing from main file 
 
+python -m app.train_main analyze
 python -m app.train_main train
 python -m app.train_main test
 
 
 pip install fastapi uvicorn[standard] sqlalchemy pydantic email-validator python-multipart python-dotenv
-pip install torch transformers scikit-learn numpy
+pip install torch transformers scikit-learn numpy  tensorflow
 pip install sqlalchemy pymysql mysqlclient
