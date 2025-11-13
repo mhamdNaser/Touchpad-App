@@ -1,140 +1,132 @@
 # app/train_main.py
 import sys
-import pickle
-import json
-import numpy as np
-import pandas as pd
-from app.services.data_loader import DataLoader
-from app.services.features import FeatureEngineer
+import os
+import traceback
+from app.services.gesture_data_loader import GestureDataLoader
+from app.services.features_visualizer import FeatureEngineerVisualizer
 from app.services.training_pipeline import TrainingPipeline
-from tensorflow.keras.models import load_model
-from sklearn.metrics import accuracy_score, classification_report
+from app.services.test_model import main as test_main
 
 def main(mode="analyze"):
     """
-    mode: 
-        "analyze" -> تحليل الميزات فقط
-        "train"   -> تدريب النموذج
-        "test"    -> اختبار النموذج
+    🚀 البرنامج الرئيسي للتدريب والاختبار
+    أوامر التشغيل:
+    python -m app.train_main analyze
+    python -m app.train_main train  
+    python -m app.train_main test
+    python -m app.train_main retrain  # ⭐ جديد
     """
-    characters = ["ا", "ب", "ت"]
+    
+    try:
+        print("=" * 60)
+        print(f"🎯 Starting Arabic Gesture Recognition - Mode: {mode.upper()}")
+        print("=" * 60)
 
-    # 1️⃣ تحميل البيانات من API
-    loader = DataLoader(api_url="https://api.sydev.site/api/gestures")
-    features_extractor = FeatureEngineer(max_timesteps=200)
-    data = loader.load_gestures_data(characters, limit_per_char=50)
-    print(f"\n✅ Loaded {len(data)} gestures\n")
+        # تحميل البيانات مرة واحدة لجميع الأوضاع
+        data_loader = GestureDataLoader(api_url="https://api.sydev.site/api/gestures")
+        gestures_data = data_loader.load_all_gestures()
+        
+        if not gestures_data:
+            print("❌ No data loaded. Exiting.")
+            return
 
-    if len(data) == 0:
-        print("❌ No gestures loaded. Check API or character list.")
-        return
+        print(f"✅ Loaded {len(gestures_data)} gestures from API")
 
-    # 2️⃣ تحليل الميزات وعرض الجدول
-    aggregated_features = features_extractor.aggregate_by_character(data)
-    df = features_extractor.show_feature_table(aggregated_features)
-    df.to_csv("gesture_features_analysis.csv", encoding="utf-8-sig")
-    print("💾 Saved CSV: gesture_features_analysis.csv\n")
+        # =====  التحليل =====
+        if mode == "analyze":
+            print("\n📊 Starting Data Analysis...")
+            feature_engineer = FeatureEngineerVisualizer(max_timesteps=150)
+            
+            # تحليل توزيع الميزات
+            feature_engineer.plot_feature_distribution(gestures_data)
+            
+            # تحليل إضافي للبيانات
+            print("\n🔍 Additional Data Analysis...")
+            characters = [gesture['character'] for gesture in gestures_data]
+            unique_chars, counts = np.unique(characters, return_counts=True)
+            print(f"📈 Character distribution: {dict(zip(unique_chars, counts))}")
+            
+            # تحليل عدد الإطارات
+            frame_counts = []
+            for gesture in gestures_data:
+                frames = gesture.get('frames', [])
+                if not frames and 'points' in gesture:
+                    frames = [gesture]  # صيغة قديمة
+                frame_counts.append(len(frames))
+            
+            print(f"📊 Frame statistics - Min: {min(frame_counts)}, Max: {max(frame_counts)}, Avg: {sum(frame_counts)/len(frame_counts):.1f}")
 
-    # 3️⃣ تشغيل التدرب أو الاختبار بناءً على الـ mode
-    if mode == "train":
-        print("🚀 Starting training pipeline...")
-        pipeline = TrainingPipeline()
-        result = pipeline.train_model(characters)
-        print(f"\n✅ Training completed. Test accuracy: {result['test_accuracy']:.3f}")
+        # =====  التدريب =====
+        elif mode == "train":
+            print("\n🏋️ Starting Model Training...")
+            pipeline = TrainingPipeline(max_timesteps=150)
+            result = pipeline.train_model()
+            print(f"✅ Training completed. Test accuracy: {result['test_accuracy']:.3f}")
 
-    elif mode == "test":
-        print("🧪 Starting test pipeline...")
+        # =====  إعادة التدريب (جديد) =====
+        elif mode == "retrain":
+            print("\n🔄 Starting Model Retraining with Fixed Preprocessing...")
+            pipeline = TrainingPipeline(max_timesteps=150)
+            
+            # استخدام دالة إعادة التدريب الجديدة
+            if hasattr(pipeline, 'retrain_with_fixed_scaling'):
+                result = pipeline.retrain_with_fixed_scaling(gestures_data)
+            else:
+                # إذا لم تكن الدالة موجودة، استخدم التدريب العادي
+                print("⚠️  Using standard training (retrain method not available)")
+                result = pipeline.train_model()
+                
+            print(f"✅ Retraining completed. Test accuracy: {result['test_accuracy']:.3f}")
 
-        # استخراج الميزات
-        X, y = features_extractor.extract_features(data)
-        print(f"🔹 Feature shape: {X.shape}, Number of classes: {len(np.unique(y))}")
+        # =====  الاختبار =====
+        elif mode == "test":
+            print("\n🧪 Starting Model Testing...")
+            
+            # التحقق من وجود الملفات المطلوبة
+            required_files = [
+                "arabic_gesture_cnn_best.h5", 
+                "scaler.pkl", 
+                "label_encoder.pkl",
+                "X_test.pkl",
+                "y_test.pkl"
+            ]
+            
+            missing_files = [f for f in required_files if not os.path.exists(f)]
+            if missing_files:
+                print(f"❌ Missing required files: {missing_files}")
+                print("💡 Please run training first: python -m app.train_main train")
+                return
+            
+            test_main()
 
-        # تحميل النموذج المحفوظ
-        model = load_model("arabic_gesture_cnn_final.h5")
-        with open("scaler.pkl", "rb") as f:
-            features_extractor.scaler = pickle.load(f)
-        with open("label_encoder.pkl", "rb") as f:
-            features_extractor.label_encoder = pickle.load(f)
+        # =====  وضع المساعدة =====
+        elif mode == "help":
+            print("""
+                    📖 Available Commands:
+                    python -m app.train_main analyze   - تحليل البيانات وتوزيع الميزات
+                    python -m app.train_main train     - تدريب النموذج من الصفر  
+                    python -m app.train_main retrain   - إعادة التدريب مع إصلاح المعايرة
+                    python -m app.train_main test      - اختبار النموذج المدرب
+                    python -m app.train_main help      - عرض هذه المساعدة
+            """)
 
-        # تحويل التسميات إلى one-hot
-        num_classes = len(np.unique(y))
-        y_cat = np.zeros((y.shape[0], num_classes))
-        y_cat[np.arange(y.shape[0]), y] = 1
+        else:
+            print(f"❌ Unknown mode '{mode}'.")
+            print("💡 Use: analyze, train, retrain, test, or help")
 
-        # التنبؤ والتقييم
-        y_pred_prob = model.predict(X)
-        y_pred = np.argmax(y_pred_prob, axis=1)
-
-        accuracy = accuracy_score(y, y_pred)
-        print(f"\n✅ Model accuracy on test set: {accuracy:.3f}\n")
-        print("📊 Classification Report:")
-        print(classification_report(y, y_pred, zero_division=0))
-
-    else:
-        print("ℹ️ Mode not recognized. Use 'analyze', 'train', or 'test'.")
+    except Exception as e:
+        print(f"❌ Error in {mode} mode: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    mode_arg = sys.argv[1] if len(sys.argv) > 1 else "analyze"
-    main(mode_arg)
-
-
-
-# from app.services.data_loader import DataLoader
-# from app.services.features import FeatureEngineer
-# from app.services.training_pipeline import TrainingPipeline
-# from app.core.database import SessionLocal
-# import numpy as np
-# import pprint
-
-# def main(mode="train"):
-#     """
-#     mode: "train" لتدريب النموذج
-#           "test" لتقييم النموذج على بيانات الاختبار
-#     """
-#     db = SessionLocal()
-#     loader = DataLoader(db)
-#     features_extractor = FeatureEngineer()
-
-#     # 1️⃣ تحميل البيانات
-#     characters = ["ا", "ب", "ت"]  # مثال لتجربة
-#     data = loader.load_gestures_data(characters, limit_per_char=50)
-#     print(f"✅ Loaded {len(data)} gestures\n")
-
-#     # 2️⃣ استخراج الميزات
-#     X, y = features_extractor.extract_features(data)
-#     print(f"🔹 Feature dimensions: X={X.shape}, y={y.shape}")
-
-#     # 3️⃣ اختيار الوضع
-#     if mode == "train":
-#         print("\n🎯 Starting training pipeline...")
-#         pipeline = TrainingPipeline(db)
-#         result = pipeline.train_model(characters)
-#         print(f"Training completed. Test accuracy: {result['test_accuracy']:.3f}")
+    # معالجة وسيطات سطر الأوامر
+    if len(sys.argv) > 1:
+        mode_arg = sys.argv[1].lower()
+    else:
+        mode_arg = "help"  # عرض المساعدة افتراضياً
     
-#     elif mode == "test":
-#         print("\n🧪 Running testing on saved model...")
-#         from tensorflow.keras.models import load_model
-#         from tensorflow.keras.utils import to_categorical
-#         from sklearn.metrics import accuracy_score, classification_report
-
-#         model = load_model("arabic_gesture_lstm_final.h5")
-#         num_classes = len(np.unique(y))
-#         y_cat = to_categorical(y, num_classes)
-
-#         y_pred_prob = model.predict(X)
-#         y_pred = np.argmax(y_pred_prob, axis=1)
-
-#         acc = accuracy_score(y, y_pred)
-#         print(f"✅ Test accuracy: {acc:.3f}")
-
-#         print("\n📊 Classification report:")
-#         print(classification_report(y, y_pred, zero_division=0))
-
-#     else:
-#         print("❌ Invalid mode. Use 'train' or 'test'.")
-
-# if __name__ == "__main__":
-#     import sys
-#     mode = sys.argv[1] if len(sys.argv) > 1 else "train"
-#     main(mode)
-
+    # تحميل numpy فقط إذا needed
+    if mode_arg == "analyze":
+        import numpy as np
+        
+    main(mode_arg)

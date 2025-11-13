@@ -6,9 +6,10 @@ import simplify from "simplify-js";
 export default function useTouchSimulator(
   canvasRef,
   previewCanvasRef,
+  selectedGesture,
   penColor
 ) {
-    const DEFAULT_ENDPOINT = "http://localhost:8000/api/gestures/predict";
+  const DEFAULT_ENDPOINT = "http://localhost:8000/api/gestures/predict";
   const pointers = useRef(new Map());
   const gestureFrames = useRef([]);
   const [payloadPreview, setPayloadPreview] = useState(null);
@@ -30,12 +31,12 @@ export default function useTouchSimulator(
     gestureFrames.current = [];
     setPayloadPreview(null);
     setHoverPosition(null);
-    nextId.current = 1; // 💡 ربما تريد إعادة تعيين الـ id أيضاً
+    nextId.current = 1;
   };
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const color = penColor
+    const color = penColor;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
@@ -57,7 +58,6 @@ export default function useTouchSimulator(
         ctx.stroke();
       }
 
-      // نرسم المسارات النشطة
       for (const [, pts] of activePathsRef.current.entries()) {
         const smooth = simplify(pts, 4, true);
         ctx.beginPath();
@@ -67,28 +67,24 @@ export default function useTouchSimulator(
       }
     };
 
-    const recordFrame = () => {
-      const pts = Array.from(pointers.current.values()).map((p) => ({
-        id: p.id,
+    // نفس منطق الهوك الثاني: تحويل المسار إلى frame كامل
+    const createFrameFromPath = (path) => {
+      if (!path || path.length === 0) return null;
+      const canvas = canvasRef.current;
+      const points = path.map((p, idx) => ({
+        id: idx + 1,
         x: parseFloat((p.x / canvas.width).toFixed(4)),
         y: parseFloat((p.y / canvas.height).toFixed(4)),
-        state: p.state,
+        state: idx === 0 ? "down" : idx === path.length - 1 ? "up" : "move",
       }));
 
-      const frame = {
-        ts: Date.now(),
-        frame_id: Date.now(),
-        points: pts,
-      };
-
-      gestureFrames.current.push(frame);
-      setPayloadPreview(frame);
+      const ts = Date.now();
+      return { ts, frame_id: ts, points };
     };
 
     const pointerDown = (e) => {
 
       e.target.setPointerCapture(e.pointerId);
-      const canvas = canvasRef.current;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
@@ -101,12 +97,10 @@ export default function useTouchSimulator(
       pointers.current.set(e.pointerId, point);
       activePathsRef.current.set(e.pointerId, [{ x, y }]);
 
-      recordFrame();
       redraw();
     };
 
     const pointerMove = (e) => {
-      const canvas = canvasRef.current;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
@@ -127,11 +121,9 @@ export default function useTouchSimulator(
       path.push({ x, y });
 
       redraw();
-      recordFrame();
     };
 
     const pointerUp = (e) => {
-      const canvas = canvasRef.current;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
@@ -141,17 +133,14 @@ export default function useTouchSimulator(
 
       if (!pointers.current.has(e.pointerId)) return;
 
-      const p = pointers.current.get(e.pointerId);
-      p.x = x;
-      p.y = y;
-      p.state = "up";
-
-      const finishedPath = activePathsRef.current.get(e.pointerId);
-      if (finishedPath && finishedPath.length > 0) {
-        completedPathsRef.current.push(finishedPath);
+      const path = activePathsRef.current.get(e.pointerId);
+      if (path && path.length > 0) {
+        completedPathsRef.current.push(path);
+        const frame = createFrameFromPath(path);
+        if (frame) gestureFrames.current.push(frame);
+        setPayloadPreview({ frames: gestureFrames.current });
       }
 
-      recordFrame();
       pointers.current.delete(e.pointerId);
       activePathsRef.current.delete(e.pointerId);
       redraw();
@@ -174,31 +163,20 @@ export default function useTouchSimulator(
     };
   }, []);
 
-
-
   const sendGesture = async () => {
 
-    // استخراج الإطارات الحقيقية التي تم جمعها
     const framesToSend = gestureFrames.current;
-
-    // التأكد من وجود إطارات
-    if (framesToSend.length === 0) {
-      console.log("No frames to send.");
-      return;
-    }
-
     const startTime = framesToSend[0].ts;
     const endTime = framesToSend.at(-1).ts;
 
     const payload = {
       start_time: startTime,
       end_time: endTime,
-      duration_ms: endTime - startTime, // مدة زمنية حقيقية
-      frame_count: framesToSend.length, // عدد إطارات حقيقي
-      frames: framesToSend, // إرسال الإطارات الأصلية
+      duration_ms: endTime - startTime,
+      frame_count: framesToSend.length,
+      frames: framesToSend,
     };
 
-    // هذا سيعرض البيانات الحقيقية في واجهتك
     setPayloadPreview(payload);
 
     console.log(payload);
@@ -208,7 +186,7 @@ export default function useTouchSimulator(
       const res = await axios.post(DEFAULT_ENDPOINT, payload, {
         headers: { "Content-Type": "application/json" },
       });
-      toast.success(res?.data?.message || "Gesture saved successfully");
+      toast.success(res?.data?.message || "Gesture sent successfully");
       console.log("✅ Gesture sent successfully:", res.data);
     } catch (err) {
       toast.error(
@@ -217,18 +195,16 @@ export default function useTouchSimulator(
       console.error("❌ Send gesture failed:", err);
     }
 
-    // تفريغ الإطارات بعد الإرسال
     gestureFrames.current = [];
     const previewCanvas = previewCanvasRef.current;
     if (previewCanvas)
       previewCanvas.getContext("2d").clearRect(0, 0, previewCanvas.width, previewCanvas.height);
   };
 
-
   const handleClearCanvas = async () => {
     clearCanvasState();
     toast.info("تم مسح اللوحة وإعادة تصفير البيانات بنجاح.");
-  }
+  };
 
   return { payloadPreview, hoverPosition, sendGesture, clearCanves: handleClearCanvas };
 }
