@@ -1,124 +1,151 @@
-# app/services/gesture_data_loader.py
 import requests
 from typing import List, Dict, Any
+import time
 
 class GestureDataLoader:
     def __init__(self, api_url: str = "https://api.sydev.site/api/gestures"):
         self.api_url = api_url
+        self.session = requests.Session()
+        self.session.timeout = 30
+        self.allowed_states = ("down", "move")
 
-    # هي الدالة الي لح بتقوم بمعالجة البيانات وتنظيمها بس طبعا لازم تستلمها ك دكشنري 
+    # -------------------------------------------------------------
+    # Internal: sort key
+    # -------------------------------------------------------------
+    def _frame_sort_key(self, frame: Dict[str, Any]):
+        return (
+            frame.get("timestamp") or
+            frame.get("ts") or
+            frame.get("frame_id") or
+            frame.get("id") or
+            0
+        )
+
+    # -------------------------------------------------------------
+    # Internal: process a single gesture
+    # -------------------------------------------------------------
     def _process_gesture(self, gesture: Dict[str, Any]) -> Dict:
         try:
             gesture_id = gesture.get("id")
-            character = gesture.get("character")
-            duration_ms = gesture.get("duration_ms", 0)
-            frame_count = gesture.get("frame_count", 0)
 
-            # نتحقق من وجود فريمز او بوينس 
-            points = gesture.get("points", [])
-            frames = gesture.get("frames", [])
+            frames_raw = gesture.get("frames", [])
+            points_raw = gesture.get("points", [])
 
-            frames_data: List[Dict] = []
+            frames: List[Dict] = []
 
-            # ✅ الحالة 1 : الايماءات فيها فريمات
-            if frames:
-                sorted_frames = sorted(frames, key=lambda f: f.get("timestamp", f.get("frame_id", f.get("id", 0))))
-                for frame in sorted_frames:
-                    frame_id = frame.get("frame_id", frame.get("id"))
-                    timestamp = frame.get("timestamp", frame.get("ts"))
-                    delta_ms = frame.get("delta_ms", 0)
+            # Case A: gesture has dedicated frames list
+            if frames_raw:
+                sorted_frames = sorted(frames_raw, key=self._frame_sort_key)
+                prev_ts = None
 
-                    # جلب النقاط من points أو raw_payload.points
-                    pts = frame.get("points", [])
-                    if not pts and "raw_payload" in frame:
-                        pts = frame["raw_payload"].get("points", [])
+                for f in sorted_frames:
+                    ts = f.get("timestamp") or f.get("ts") or 0
+                    delta = f.get("delta_ms", 0)
 
-                    frame_data = {
-                        "frame_id": frame_id,
-                        "timestamp": timestamp,
-                        "delta_ms": delta_ms,
-                        "points": []
-                    }
+                    # compute delta if missing
+                    if (not delta) and prev_ts is not None:
+                        delta = ts - prev_ts
+                    prev_ts = ts
 
-                    for pt in pts:
-                        frame_data["points"].append({
-                            "x": pt.get("x", 0.0),
-                            "y": pt.get("y", 0.0),
-                            "state": pt.get("state", "unknown"),
-                            "pressure": pt.get("pressure", 0.0),
-                            "angle": pt.get("angle", 0.0),
-                            "vx": pt.get("vx", 0.0),
-                            "vy": pt.get("vy", 0.0),
-                            "dx": pt.get("dx", 0.0),
-                            "dy": pt.get("dy", 0.0)
-                        })
+                    pts = f.get("points", [])
+                    if not pts and "raw_payload" in f:
+                        pts = f["raw_payload"].get("points", [])
 
-                    frames_data.append(frame_data)
-                    
-            # الحالة 2 : الايماءا فيها بوينت
-            elif points:
-                frame_data = {
-                    "frame_id": gesture_id,
-                    "timestamp": points[0].get("timestamp", 0) if points else 0,
-                    "delta_ms": points[0].get("delta_ms", 0) if points else 0,
-                    "points": []
-                }
+                    clean_pts = []
+                    for p in pts:
+                        if p.get("state") in self.allowed_states:
+                            clean_pts.append({
+                                "x": p.get("x", 0.0),
+                                "y": p.get("y", 0.0),
+                                "pressure": p.get("pressure", 0.0),
+                                "angle": p.get("angle", 0.0),
+                                "vx": p.get("vx", 0.0),
+                                "vy": p.get("vy", 0.0),
+                                "dx": p.get("dx", 0.0),
+                                "dy": p.get("dy", 0.0)
+                            })
 
-                for pt in points:
-                    frame_data["points"].append({
-                        "x": pt.get("x", 0.0),
-                        "y": pt.get("y", 0.0),
-                        "state": pt.get("state", "unknown"),
-                        "pressure": pt.get("pressure", 0.0),
-                        "angle": pt.get("angle", 0.0),
-                        "vx": pt.get("vx", 0.0),
-                        "vy": pt.get("vy", 0.0),
-                        "dx": pt.get("dx", 0.0),
-                        "dy": pt.get("dy", 0.0)
+                    frames.append({
+                        "frame_id": f.get("frame_id", f.get("id")),
+                        "timestamp": ts,
+                        "delta_ms": delta,
+                        "points": clean_pts
                     })
 
-                frames_data.append(frame_data)
+            # Case B: raw points only, grouped by frame_id
+            elif points_raw:
+                temp = {}
+                for p in points_raw:
+                    fid = p.get("frame_id")
+                    if fid not in temp:
+                        temp[fid] = {
+                            "frame_id": fid,
+                            "timestamp": p.get("timestamp", 0),
+                            "delta_ms": p.get("delta_ms", 0),
+                            "points": []
+                        }
+
+                    if p.get("state") in self.allowed_states:
+                        temp[fid]["points"].append({
+                            "x": p.get("x", 0.0),
+                            "y": p.get("y", 0.0),
+                            "pressure": p.get("pressure", 0.0),
+                            "angle": p.get("angle", 0.0),
+                            "vx": p.get("vx", 0.0),
+                            "vy": p.get("vy", 0.0),
+                            "dx": p.get("dx", 0.0),
+                            "dy": p.get("dy", 0.0)
+                        })
+
+                frames = list(temp.values())
+                frames.sort(key=self._frame_sort_key)
 
             else:
-                print(f"⚠️ Gesture {gesture_id} has no frames or points")
                 return None
 
             return {
-                "gesture_id": gesture_id,
-                "character": character,
-                "frames": frames_data,
-                "duration_ms": duration_ms,
-                "frame_count": frame_count or len(frames_data)
+                "gesture_id": gesture.get("id"),
+                "character": gesture.get("character"),
+                "duration_ms": gesture.get("duration_ms", 0),
+                "frames": frames,
+                "frame_count": len(frames)
             }
 
-        except Exception as e:
-            print(f"❌ Error processing gesture {gesture.get('id')}: {e}")
+        except Exception:
             return None
 
+    # -------------------------------------------------------------
+    # Public: load all gestures
+    # -------------------------------------------------------------
     def load_all_gestures(self) -> List[Dict]:
-        
-        gestures_data: List[Dict] = []
-
         try:
-            response = requests.get(self.api_url)
+            response = self.session.get(self.api_url)
             response.raise_for_status()
+            data = response.json()
 
-            all_gestures = response.json()
+            if isinstance(data, dict):
+                if "data" in data:
+                    data = data["data"]
+                elif "gestures" in data:
+                    data = data["gestures"]
 
-            # استخدام مفتاح للداتا لو كان موجود بس بحالتنا قمنا بإعداد داتا خاصة فينا 
-            if isinstance(all_gestures, dict) and "data" in all_gestures:
-                all_gestures = all_gestures["data"]
+            if not isinstance(data, list):
+                return []
 
-            # معالجة كل إيماءة مباشرة بعد الجلب
-            for gesture in all_gestures:
-                processed = self._process_gesture(gesture)
-                if processed:
-                    gestures_data.append(processed)
+            processed = []
+            for g in data:
+                p = self._process_gesture(g)
+                if p:
+                    processed.append(p)
 
-            print(f"✅ Total processed gestures: {len(gestures_data)}")
+            return processed
+
+        except Exception:
+            return []
 
 
-        except Exception as e:
-            print(f"❌ Error fetching data from API: {e}")
-
-        return gestures_data
+# optional runnable entry
+if __name__ == "__main__":
+    ld = GestureDataLoader()
+    gestures = ld.load_all_gestures()
+    print(f"Loaded: {len(gestures)} gestures")

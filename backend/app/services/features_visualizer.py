@@ -1,313 +1,196 @@
+
+"""
+Production-ready feature extractor for per-frame features suitable for sequence models (RNN/CNN-1D/Transformer).
+
+Design decisions (based on your stats and our discussion):
+- We keep the 11 robust features per frame:
+  [x_mean, x_std, y_mean, y_std, x_min, x_max, y_min, y_max, pressure_mean, angle_mean, delta_s]
+- Output default: a "wide" CSV (one row per gesture) where per-frame features are flattened and padded/truncated to `max_timesteps`.
+- Also supports optional "long" CSV (one row per frame) if you prefer working with long format.
+- Minimal prints, production safe (error handling, dtype control).
+- Companion metadata (gesture_id, character, original_frame_count) included.
+
+Usage:
+    extractor = ProductionFeatureExtractor(loader=None, max_timesteps=150)
+    # loader should be an object with .load_all_gestures() OR pass a list of gestures to process_gestures
+    gestures = loader.load_all_gestures()
+    extractor.process_gestures(gestures, out_csv="gesture_features_wide.csv")
+
+You can later load the CSV and reshape each row to (max_timesteps, feature_dim) for training sequence models.
+"""
+
+from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
-from typing import List, Dict
-from sklearn.preprocessing import RobustScaler, LabelEncoder
-from sklearn.model_selection import train_test_split
 
 
-class FeatureEngineerVisualizer:
-    def __init__(self, max_timesteps: int = 150, test_size: float = 0.2, val_size: float = 0.1, random_state: int = 42):
-        self.scaler = RobustScaler()  # ✅ تغيير من StandardScaler إلى RobustScaler
-        self.label_encoder = LabelEncoder()
+class ProductionFeatureExtractor:
+    def __init__(self, max_timesteps: int = 150, feature_dim: int = 11, verbose: bool = False):
         self.max_timesteps = max_timesteps
-        self.test_size = test_size
-        self.val_size = val_size
-        self.random_state = random_state
+        self.feature_dim = feature_dim  # must be 11 (kept for clarity)
+        self.verbose = verbose
+        # Feature names per-frame
+        self.per_frame_names = [
+            "x_mean", "x_std",
+            "y_mean", "y_std",
+            "x_min", "x_max",
+            "y_min", "y_max",
+            "pressure_mean", "angle_mean",
+            "delta_s"
+        ]
 
-    # ======================================================
-    # 🧠 استخراج الميزات من كل حركة (Gesture) - مُحسّن
-    # ======================================================
-    def extract_sequence_features(self, gesture: Dict) -> np.ndarray:
-        frames = gesture.get('frames', [])
-        
-        # إذا كانت البيانات في الصيغة القديمة
-        if not frames and 'points' in gesture:
-            frames = [{'points': gesture['points'], 'delta_ms': gesture.get('delta_ms', 16)}]  # 16ms افتراضي
+    # ---------------- core: extract features from a single frame ----------------
+    def _extract_frame_features(self, frame: Dict) -> List[float]:
+        pts = frame.get("points", []) or []
 
-        if not frames:
-            return None
+        # timestamp/delta handling
+        delta_ms = frame.get("delta_ms", None)
+        # delta_s default (in seconds)
+        delta_s = (max(delta_ms, 1) / 1000.0) if delta_ms is not None else 0.016
 
-        sequence = []
-        prev_points = None
+        if not pts:
+            # Return zeros except delta_s
+            return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, float(delta_s)]
 
-        for i, frame in enumerate(frames):
-            points = frame.get('points', [])
-            if not points:
-                continue
+        # gather arrays
+        x = np.array([p.get("x", 0.0) for p in pts], dtype=np.float32)
+        y = np.array([p.get("y", 0.0) for p in pts], dtype=np.float32)
+        pressure = np.array([p.get("pressure", 0.0) for p in pts], dtype=np.float32)
+        angle = np.array([p.get("angle", 0.0) for p in pts], dtype=np.float32)
 
-            delta_ms = max(frame.get('delta_ms', 16), 1)  # ✅ تجنب القسمة على صفر
-            delta_s = delta_ms / 1000.0
+        # safe stats
+        x_mean = float(np.mean(x)) if x.size else 0.0
+        x_std = float(np.std(x)) if x.size else 0.0
+        y_mean = float(np.mean(y)) if y.size else 0.0
+        y_std = float(np.std(y)) if y.size else 0.0
+        x_min = float(np.min(x)) if x.size else 0.0
+        x_max = float(np.max(x)) if x.size else 0.0
+        y_min = float(np.min(y)) if y.size else 0.0
+        y_max = float(np.max(y)) if y.size else 0.0
+        pressure_mean = float(np.mean(pressure)) if pressure.size else 0.0
+        angle_mean = float(np.mean(angle)) if angle.size else 0.0
 
-            # استخراج الإحداثيات الأساسية
-            x = np.array([p.get('x', 0) for p in points])
-            y = np.array([p.get('y', 0) for p in points])
-            pressure = np.array([p.get('pressure', 0.5) for p in points])  # قيمة افتراضية 0.5
-            angle = np.array([p.get('angle', 0) for p in points])
+        return [
+            x_mean, x_std,
+            y_mean, y_std,
+            x_min, x_max,
+            y_min, y_max,
+            pressure_mean, angle_mean,
+            float(delta_s)
+        ]
 
-            # ✅ حساب السرعة والتسارع بشكل أكثر دقة
-            if i == 0 or prev_points is None:
-                # الإطار الأول - استخدام قيم صفرية
-                vx = np.zeros_like(x)
-                vy = np.zeros_like(y)
-                ax = np.zeros_like(x)
-                ay = np.zeros_like(y)
-            else:
-                # حساب السرعة بناء على التغير في المواقع
-                prev_x = np.array([p.get('x', 0) for p in prev_points])
-                prev_y = np.array([p.get('y', 0) for p in prev_points])
-                
-                dx = x - prev_x
-                dy = y - prev_y
-                
-                vx = dx / delta_s
-                vy = dy / delta_s
-                
-                # ✅ تحسين حساب التسارع
-                if i == 1:
-                    ax = np.zeros_like(vx)
-                    ay = np.zeros_like(vy)
-                else:
-                    # نحتاج لحساب السرعة السابقة
-                    prev_prev_points = frames[i-2].get('points', [])
-                    if prev_prev_points:
-                        prev_prev_x = np.array([p.get('x', 0) for p in prev_prev_points])
-                        prev_prev_y = np.array([p.get('y', 0) for p in prev_prev_points])
-                        prev_delta_ms = max(frames[i-1].get('delta_ms', 16), 1)
-                        prev_delta_s = prev_delta_ms / 1000.0
-                        
-                        prev_dx = prev_x - prev_prev_x
-                        prev_dy = prev_y - prev_prev_y
-                        prev_vx = prev_dx / prev_delta_s
-                        prev_vy = prev_dy / prev_delta_s
-                        
-                        ax = (vx - prev_vx) / delta_s
-                        ay = (vy - prev_vy) / delta_s
-                    else:
-                        ax = np.zeros_like(vx)
-                        ay = np.zeros_like(vy)
+    # ---------------- extract per-gesture: sequence of frames -> fixed-length array ----------------
+    def _gesture_to_sequence(self, gesture: Dict) -> np.ndarray:
+        frames = gesture.get("frames", []) or []
+        seq = []
 
-            # magnitude محسوب بشكل صحيح
-            velocity_magnitude = np.sqrt(vx**2 + vy**2)
-            acceleration_magnitude = np.sqrt(ax**2 + ay**2)
+        for frame in frames:
+            f = self._extract_frame_features(frame)
+            seq.append(f)
 
-            # ✅ ميزات محسنة مع قيم افتراضية آمنة
-            frame_features = [
-                np.mean(x) if len(x) > 0 else 0.0,
-                np.std(x) if len(x) > 0 else 0.1,
-                np.mean(y) if len(y) > 0 else 0.0,
-                np.std(y) if len(y) > 0 else 0.1,
-                np.mean(pressure) if len(pressure) > 0 else 0.5,
-                np.std(pressure) if len(pressure) > 0 else 0.1,
-                np.mean(angle) if len(angle) > 0 else 0.0,
-                np.std(angle) if len(angle) > 0 else 0.1,
-                np.mean(vx) if len(vx) > 0 else 0.0,
-                np.std(vx) if len(vx) > 0 else 0.1,
-                np.mean(vy) if len(vy) > 0 else 0.0,
-                np.std(vy) if len(vy) > 0 else 0.1,
-                np.mean(ax) if len(ax) > 0 else 0.0,
-                np.std(ax) if len(ax) > 0 else 0.1,
-                np.mean(ay) if len(ay) > 0 else 0.0,
-                np.std(ay) if len(ay) > 0 else 0.1,
-                np.mean(velocity_magnitude) if len(velocity_magnitude) > 0 else 0.0,
-                np.std(velocity_magnitude) if len(velocity_magnitude) > 0 else 0.1,
-                np.mean(acceleration_magnitude) if len(acceleration_magnitude) > 0 else 0.0,
-                delta_s,
-                len(points)
-            ]
-            
-            sequence.append(frame_features)
-            prev_points = points  # حفظ النقاط للحسابات التالية
-
-        if not sequence:
-            return None
-
-        # ✅ تطبيع الطول مع حشو ذكي (لا أصفار)
-        feature_dim = len(sequence[0])
-        if len(sequence) < self.max_timesteps:
-            # استخدام متوسط الإطارات الأخيرة للحشو بدلاً من الأصفار
-            last_frame = sequence[-1]
-            padding_frames = [last_frame] * (self.max_timesteps - len(sequence))
-            sequence.extend(padding_frames)
+        # convert to numpy array (T, D)
+        if len(seq) == 0:
+            seq_arr = np.zeros((0, self.feature_dim), dtype=np.float32)
         else:
-            sequence = sequence[:self.max_timesteps]
+            seq_arr = np.array(seq, dtype=np.float32)
 
-        return np.array(sequence)
+        T = seq_arr.shape[0]
 
-    # ======================================================
-    # 🔄 تقسيم البيانات + السكايل + التشفير - مُحسّن
-    # ======================================================
-    def split_data(self, gestures_data: List[Dict], fixed_indices=None):
-        features, labels = [], []
-        
-        print(f"🔍 Processing {len(gestures_data)} gestures...")
-        
-        for i, gesture in enumerate(gestures_data):
-            seq = self.extract_sequence_features(gesture)
-            if seq is not None:
-                features.append(seq)
-                labels.append(gesture['character'])
-            else:
-                print(f"⚠️ Skipped gesture {i} due to missing data")
-
-        if len(features) == 0:
-            raise ValueError("❌ لا توجد بيانات صالحة للتدريب.")
-
-        X = np.array(features)
-        y = np.array(labels)
-
-        print(f"✅ Extracted {len(X)} sequences with shape {X.shape}")
-
-        # ✅ فحص توزيع التسميات
-        unique_labels, counts = np.unique(y, return_counts=True)
-        print(f"📊 Label distribution: {dict(zip(unique_labels, counts))}")
-
-        # تقسيم البيانات
-        if fixed_indices:
-            X_train = X[fixed_indices['train']]
-            X_val = X[fixed_indices['val']]
-            X_test = X[fixed_indices['test']]
-            y_train = y[fixed_indices['train']]
-            y_val = y[fixed_indices['val']]
-            y_test = y[fixed_indices['test']]
+        if T >= self.max_timesteps:
+            # downsample uniformly to max_timesteps to preserve temporal structure
+            idx = np.linspace(0, T - 1, self.max_timesteps).astype(int)
+            seq_fixed = seq_arr[idx]
         else:
-            stratify_labels = y if len(np.unique(y)) > 1 else None
-            X_temp, X_test, y_temp, y_test = train_test_split(
-                X, y, test_size=self.test_size,
-                stratify=stratify_labels, random_state=self.random_state
-            )
+            # pad at the end with zeros (preserve temporal order) — keep delta_s for padding as last seen delta
+            pad_needed = self.max_timesteps - T
+            if T == 0:
+                seq_fixed = np.zeros((self.max_timesteps, self.feature_dim), dtype=np.float32)
+            else:
+                last_delta = seq_arr[-1, -1]
+                pad_block = np.zeros((pad_needed, self.feature_dim), dtype=np.float32)
+                pad_block[:, -1] = last_delta  # keep delta_s for padding
+                seq_fixed = np.vstack([seq_arr, pad_block])
 
-            val_size_adj = self.val_size / (1 - self.test_size)
-            stratify_temp = y_temp if len(np.unique(y_temp)) > 1 else None
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_temp, y_temp, test_size=val_size_adj,
-                stratify=stratify_temp, random_state=self.random_state
-            )
+        return seq_fixed
 
-        print(f"📁 Split sizes - Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
-
-        # ======================================================
-        # ✅ Robust Scaling على بيانات التدريب فقط
-        # ======================================================
-        n_features = X_train.shape[2]
-        
-        print("🔧 Applying RobustScaler...")
-        X_train_flat = X_train.reshape(-1, n_features)
-        self.scaler.fit(X_train_flat)
-
-        # تطبيق المعايرة
-        X_train_scaled = self.scaler.transform(X_train_flat).reshape(X_train.shape)
-        X_val_scaled = self.scaler.transform(X_val.reshape(-1, n_features)).reshape(X_val.shape)
-        X_test_scaled = self.scaler.transform(X_test.reshape(-1, n_features)).reshape(X_test.shape)
-
-        # ✅ فحص النتائج بعد المعايرة
-        print(f"📊 After scaling - Train range: [{X_train_scaled.min():.2f}, {X_train_scaled.max():.2f}]")
-        print(f"📊 After scaling - Mean: {X_train_scaled.mean():.2f}, Std: {X_train_scaled.std():.2f}")
-
-        # ======================================================
-        # ✅ Label Encoding محسّن
-        # ======================================================
-        self.label_encoder.fit(y_train)
-        y_train_enc = self.label_encoder.transform(y_train)
-
-        print(f"🎯 Label classes: {self.label_encoder.classes_}")
-
-        def safe_encode(y_vals):
-            encoded = []
-            for lbl in y_vals:
-                if lbl in self.label_encoder.classes_:
-                    encoded.append(self.label_encoder.transform([lbl])[0])
-                else:
-                    # استخدام الصنف الأكثر شيوعاً كبديل
-                    encoded.append(0)  # أو يمكن استخدام np.argmax(np.bincount(y_train_enc))
-            return np.array(encoded)
-
-        y_val_enc = safe_encode(y_val)
-        y_test_enc = safe_encode(y_test)
-
-        # ======================================================
-        # 🧾 معلومات التقسيم مفصلة
-        # ======================================================
-        split_info = {
-            "train_samples": len(y_train_enc),
-            "val_samples": len(y_val_enc),
-            "test_samples": len(y_test_enc),
-            "train_distribution": dict(zip(*np.unique(y_train_enc, return_counts=True))),
-            "val_distribution": dict(zip(*np.unique(y_val_enc, return_counts=True))),
-            "test_distribution": dict(zip(*np.unique(y_test_enc, return_counts=True))),
-            "feature_range_after_scaling": {
-                "min": float(X_train_scaled.min()),
-                "max": float(X_train_scaled.max()),
-                "mean": float(X_train_scaled.mean()),
-                "std": float(X_train_scaled.std())
-            }
-        }
-
-        print("✅ Data splitting and preprocessing completed successfully!")
-        return X_train_scaled, X_val_scaled, X_test_scaled, y_train_enc, y_val_enc, y_test_enc, split_info, fixed_indices
-
-    # ======================================================
-    # 📈 حفظ إحصائيات الميزات - مُحسّن
-    # ======================================================
-    def plot_feature_distribution(self, gestures_data: List[Dict]):
-        features_to_save = ['x', 'y', 'pressure', 'angle', 'delta_ms']
-        agg = {}
-
-        print(f"📈 Analyzing feature distribution for {len(gestures_data)} gestures...")
-
-        for gesture in gestures_data:
-            char = gesture['character']
-            if char not in agg:
-                agg[char] = {feat: [] for feat in features_to_save}
-
-            frames = gesture.get('frames', [])
-            if not frames and 'points' in gesture:
-                frames = [{'points': gesture['points'], 'delta_ms': gesture.get('delta_ms', 16)}]
-
-            for frame in frames:
-                points = frame.get('points', [])
-                delta_ms = max(frame.get('delta_ms', 16), 1)
-                
-                if not points:
-                    agg[char]['delta_ms'].append(delta_ms)
-                    continue
-
-                for feat in features_to_save:
-                    if feat == 'delta_ms':
-                        agg[char]['delta_ms'].append(delta_ms)
-                    else:
-                        values = [p.get(feat, 0) for p in points]
-                        agg[char][feat].extend(values)
-
+    # ---------------- public: process gestures list and save CSV ----------------
+    def process_gestures(self, gestures: List[Dict], out_csv: str = "gesture_features_wide.csv", format: str = "wide") -> str:
+        """
+        gestures: list of gesture dicts
+        out_csv: output filename
+        format: 'wide' (one row per gesture, flattened) or 'long' (one row per frame)
+        Returns: path to saved CSV
+        """
         rows = []
-        for char, feats in agg.items():
-            row = {'character': char, 'total_samples': sum(len(v) for v in feats.values())}
-            for feat, values in feats.items():
-                arr = np.array(values)
-                if arr.size == 0:
-                    row.update({
-                        f'{feat}_mean': 0.0,
-                        f'{feat}_std': 0.0,
-                        f'{feat}_min': 0.0,
-                        f'{feat}_max': 0.0,
-                        f'{feat}_nonzero_count': 0
-                    })
-                else:
-                    non_zero = arr[arr != 0]
-                    row.update({
-                        f'{feat}_mean': float(np.mean(arr)),
-                        f'{feat}_std': float(np.std(arr)),
-                        f'{feat}_min': float(np.min(arr)),
-                        f'{feat}_max': float(np.max(arr)),
-                        f'{feat}_nonzero_count': len(non_zero)
-                    })
-            rows.append(row)
 
-        df = pd.DataFrame(rows)
-        df.to_csv("gesture_features_analysis.csv", index=False, encoding='utf-8-sig')
-        print("✅ Gesture features analysis saved to gesture_features_analysis.csv")
-        
-        # عرض ملخص سريع
-        print("\n📊 Feature Analysis Summary:")
-        print(df[['character', 'total_samples', 'x_mean', 'y_mean', 'pressure_mean']].to_string(index=False))
-        
-        return df
+        if format not in ("wide", "long"):
+            raise ValueError("format must be 'wide' or 'long'")
+
+        if format == "wide":
+            # prepare column names
+            cols = ["gesture_id", "character", "orig_frame_count"]
+            for t in range(self.max_timesteps):
+                for fn in self.per_frame_names:
+                    cols.append(f"t{t:03d}_{fn}")
+
+            # iterate and build rows
+            for g in gestures:
+                gid = g.get("gesture_id") or g.get("id")
+                char = g.get("character")
+                orig_count = len(g.get("frames", []) or [])
+                seq_fixed = self._gesture_to_sequence(g)  # shape (max_timesteps, feature_dim)
+                flat = seq_fixed.flatten()
+                row = [gid, char, orig_count] + flat.tolist()
+                rows.append(row)
+
+            df = pd.DataFrame(rows, columns=cols)
+            df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+
+            if self.verbose:
+                print(f"Saved wide CSV: {out_csv} (rows={len(df)})")
+            return out_csv
+
+        else:
+            # long format: one row per frame
+            cols = ["gesture_id", "character", "frame_index", "orig_frame_count"] + self.per_frame_names
+            for g in gestures:
+                gid = g.get("gesture_id") or g.get("id")
+                char = g.get("character")
+                frames = g.get("frames", []) or []
+                orig_count = len(frames)
+                seq = self._gesture_to_sequence(g)[:orig_count] if orig_count > 0 else np.zeros((0, self.feature_dim))
+                for i in range(seq.shape[0]):
+                    row = [gid, char, int(i), orig_count] + seq[i].tolist()
+                    rows.append(row)
+
+            df = pd.DataFrame(rows, columns=cols)
+            df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+            if self.verbose:
+                print(f"Saved long CSV: {out_csv} (rows={len(df)})")
+            return out_csv
+
+
+# ------------------ Utility function: reshape flattened row back to sequence ------------------
+def reshape_flat_row(flat_row: List[float], max_timesteps: int = 150, feature_dim: int = 11) -> np.ndarray:
+    arr = np.array(flat_row, dtype=np.float32)
+    expected = max_timesteps * feature_dim
+    if arr.size != expected:
+        raise ValueError(f"Flat row length {arr.size} != expected {expected}")
+    return arr.reshape((max_timesteps, feature_dim))
+
+
+# ---------------- example usage ----------------
+if __name__ == "__main__":
+    # small example: expecting you have a loader with load_all_gestures()
+    try:
+        from app.services.gesture_data_loader import GestureDataLoader
+        loader = GestureDataLoader()
+        gestures = loader.load_all_gestures()
+    except Exception:
+        gestures = []
+
+    extractor = ProductionFeatureExtractor(max_timesteps=150, verbose=True)
+    if gestures:
+        extractor.process_gestures(gestures, out_csv="gesture_features_wide.csv", format="wide")
+    else:
+        print("No gestures available to process in this environment.")

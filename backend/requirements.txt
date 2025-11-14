@@ -42,9 +42,7 @@ uvicorn main:app --reload
 
 ###### to run training or testing from main file 
 
-python -m app.train_main analyze
 python -m app.train_main train
-python -m app.train_main retrain
 python -m app.train_main test
 python -m app.train_main help
 
