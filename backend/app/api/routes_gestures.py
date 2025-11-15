@@ -4,7 +4,7 @@ from typing import List
 from app.services.prediction_pipeline import PredictionPipeline
 
 router = APIRouter()
-predictor = PredictionPipeline(max_timesteps=100)
+predictor = PredictionPipeline(max_timesteps=50)
 
 
 class Point(BaseModel):

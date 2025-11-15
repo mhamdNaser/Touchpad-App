@@ -25,7 +25,7 @@ from app.services.features_visualizer import ProductionFeatureExtractor
 
 
 class TrainingPipeline:
-    def __init__(self, max_timesteps: int = 150, verbose: bool = True):
+    def __init__(self, max_timesteps: int = 50, verbose: bool = True):
         self.data_loader = GestureDataLoader()
         self.feature_extractor = ProductionFeatureExtractor(max_timesteps=max_timesteps, verbose=verbose)
         self.max_timesteps = max_timesteps
@@ -53,7 +53,7 @@ class TrainingPipeline:
 
         model.compile(
             loss='categorical_crossentropy',
-            optimizer=Adam(learning_rate=0.001),
+            optimizer=Adam(learning_rate=0.0005),
             metrics=['accuracy']
         )
         

@@ -44,7 +44,10 @@ uvicorn main:app --reload
 
 python -m app.train_main train
 python -m app.train_main test
-python -m app.train_main help
+python -m app.train_main extract_adv
+
+
+python feature_analysis.py
 
 
 pip install fastapi uvicorn[standard] sqlalchemy pydantic email-validator python-multipart python-dotenv

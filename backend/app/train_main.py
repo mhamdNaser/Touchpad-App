@@ -24,7 +24,7 @@ def main(mode="train"):
         # =====  التدريب =====
         if mode == "train":
             print("\n🏋️ Starting Model Training...")
-            pipeline = TrainingPipeline(max_timesteps=150)
+            pipeline = TrainingPipeline(max_timesteps=50)
             result = pipeline.train_model()
             print(f"✅ Training completed. Test accuracy: {result['test_accuracy']:.3f}")
 
@@ -47,6 +47,18 @@ def main(mode="train"):
                 return
             
             test_main()
+        
+        elif mode == "extract_adv":
+            print("\n📊 Extracting Advanced Feature CSV...")
+            from app.services.advanced_feature_generator import AdvancedFeatureGenerator
+
+            generator = AdvancedFeatureGenerator(max_timesteps=50, verbose=True)
+            generator.generate_features(
+                gestures_data,
+                out_csv="ADVANCED_features.csv",
+                format="wide"
+            )
+            print("✅ Advanced feature extraction completed.")
 
         else:
             print(f"❌ Unknown mode '{mode}'.")
