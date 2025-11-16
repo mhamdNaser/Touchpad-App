@@ -25,7 +25,7 @@ from app.services.features_visualizer import ProductionFeatureExtractor
 
 
 class TrainingPipeline:
-    def __init__(self, max_timesteps: int = 50, verbose: bool = True):
+    def __init__(self, max_timesteps: int = 200, verbose: bool = True):
         self.data_loader = GestureDataLoader()
         self.feature_extractor = ProductionFeatureExtractor(max_timesteps=max_timesteps, verbose=verbose)
         self.max_timesteps = max_timesteps

@@ -50,9 +50,9 @@ def main(mode="train"):
         
         elif mode == "extract_adv":
             print("\n📊 Extracting Advanced Feature CSV...")
-            from app.services.advanced_feature_generator import AdvancedFeatureGenerator
+            from app.services.advanced_feature_generator import StatisticalFeatureGenerator
 
-            generator = AdvancedFeatureGenerator(max_timesteps=50, verbose=True)
+            generator = StatisticalFeatureGenerator(max_timesteps=50, verbose=True)
             generator.generate_features(
                 gestures_data,
                 out_csv="ADVANCED_features.csv",

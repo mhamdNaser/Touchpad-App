@@ -19,10 +19,60 @@ export default function useTouchSimulator(
   const activePathsRef = useRef(new Map());
   const completedPathsRef = useRef([]);
 
-  const SAMPLING_RATE = 10; // 10ms لكل فريم
+  const SAMPLING_RATE = 10;
   const frameTimer = useRef(null);
-  const lastPointRef = useRef(null);
 
+  // ==================== createFixedFrame محسنة ====================
+  const createFixedFrame = (activePoints, maxPoints = 20) => {
+    const ts = Date.now();
+    const prevFrame = gestureFrames.current[gestureFrames.current.length - 1];
+
+    const delta_ms = prevFrame ? ts - prevFrame.ts : 1; // لتجنب الصفر
+
+    const points = Array.from({ length: maxPoints }, (_, i) => {
+      const p = activePoints[i];
+      let dx = 0, dy = 0, vx = 0, vy = 0, angle = 0;
+
+      if (p && prevFrame) {
+        const prevPoint = prevFrame.points[i] || { x: 0, y: 0 };
+        dx = p.x - prevPoint.x;
+        dy = p.y - prevPoint.y;
+        vx = dx / delta_ms;
+        vy = dy / delta_ms;
+        angle = Math.atan2(dy, dx);
+      }
+
+      return p
+        ? {
+            id: p.id,
+            x: parseFloat(p.x.toFixed(4)),
+            y: parseFloat(p.y.toFixed(4)),
+            state: p.state || "move",
+            pressure: p.pressure || 1.0,
+            dx: parseFloat(dx.toFixed(4)),
+            dy: parseFloat(dy.toFixed(4)),
+            vx: parseFloat(vx.toFixed(4)),
+            vy: parseFloat(vy.toFixed(4)),
+            angle: parseFloat(angle.toFixed(4)),
+          }
+        : {
+            id: i + 1,
+            x: 0,
+            y: 0,
+            state: "none",
+            pressure: 0,
+            dx: 0,
+            dy: 0,
+            vx: 0,
+            vy: 0,
+            angle: 0,
+          };
+    });
+
+    return { ts, delta_ms, frame_id: ts, points };
+  };
+
+  // ==================== مسح حالة اللوحة ====================
   const clearCanvasState = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -37,53 +87,6 @@ export default function useTouchSimulator(
     setHoverPosition(null);
     nextId.current = 1;
     clearInterval(frameTimer.current);
-    lastPointRef.current = null;
-  };
-
-  const computePointFeatures = (prevPoint, currPoint, deltaMs) => {
-    if (!prevPoint) {
-      return { dx: 0, dy: 0, vx: 0, vy: 0, angle: 0, pressure: 1.0 };
-    }
-
-    const dx = currPoint.x - prevPoint.x;
-    const dy = currPoint.y - prevPoint.y;
-
-    const vx = dx / (deltaMs || 1);
-    const vy = dy / (deltaMs || 1);
-
-    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-
-    const speed = Math.sqrt(dx * dx + dy * dy) / (deltaMs || 1);
-    const pressure = Math.max(0.1, Math.min(1.0, 1.0 - speed * 5));
-
-    return { dx, dy, vx, vy, angle, pressure };
-  };
-
-  const createFixedFrame = (point, maxPoints = 21) => {
-    const canvas = canvasRef.current;
-    const ts = Date.now();
-    const delta_ms = gestureFrames.current.length
-      ? ts - gestureFrames.current[gestureFrames.current.length - 1].ts
-      : 0;
-
-    const prevFrame = gestureFrames.current.length
-      ? gestureFrames.current[gestureFrames.current.length - 1]
-      : null;
-
-    const points = Array.from({ length: maxPoints }, (_, i) => {
-      const prevPoint = prevFrame ? prevFrame.points[i] : null;
-      const features = computePointFeatures(prevPoint, point, delta_ms);
-
-      return {
-        id: i + 1,
-        x: parseFloat((point.x / canvas.width).toFixed(4)),
-        y: parseFloat((point.y / canvas.height).toFixed(4)),
-        state: "move",
-        ...features,
-      };
-    });
-
-    return { ts, delta_ms, frame_id: ts, points };
   };
 
   useEffect(() => {
@@ -118,6 +121,7 @@ export default function useTouchSimulator(
 
     const pointerDown = (e) => {
       e.target.setPointerCapture(e.pointerId);
+
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
@@ -126,14 +130,20 @@ export default function useTouchSimulator(
       const y = (e.clientY - rect.top) * scaleY;
 
       const id = nextId.current++;
-      pointers.current.set(e.pointerId, { id, x, y, state: "down" });
+      pointers.current.set(e.pointerId, {
+        id,
+        x: x / canvas.width,
+        y: y / canvas.height,
+        state: "down",
+      });
+
       activePathsRef.current.set(e.pointerId, [{ x, y, state: "down", id }]);
 
-      lastPointRef.current = { x, y };
-
       frameTimer.current = setInterval(() => {
-        if (!lastPointRef.current) return;
-        const frame = createFixedFrame(lastPointRef.current);
+        if (pointers.current.size === 0) return;
+
+        const activePoints = Array.from(pointers.current.values());
+        const frame = createFixedFrame(activePoints);
         gestureFrames.current.push(frame);
         setPayloadPreview({ frames: gestureFrames.current });
       }, SAMPLING_RATE);
@@ -152,7 +162,10 @@ export default function useTouchSimulator(
       const y = (e.clientY - rect.top) * scaleY;
       setHoverPosition({ x, y });
 
-      lastPointRef.current = { x, y };
+      const p = pointers.current.get(e.pointerId);
+      p.x = x / canvas.width;
+      p.y = y / canvas.height;
+      p.state = "move";
 
       const path = activePathsRef.current.get(e.pointerId);
       path.push({ x, y, state: "move", id: path.length + 1 });
@@ -163,13 +176,14 @@ export default function useTouchSimulator(
     const pointerUp = (e) => {
       if (!pointers.current.has(e.pointerId)) return;
 
-      clearInterval(frameTimer.current);
-      frameTimer.current = null;
-      lastPointRef.current = null;
-
-      completedPathsRef.current.push(activePathsRef.current.get(e.pointerId));
       pointers.current.delete(e.pointerId);
+      completedPathsRef.current.push(activePathsRef.current.get(e.pointerId));
       activePathsRef.current.delete(e.pointerId);
+
+      if (pointers.current.size === 0) {
+        clearInterval(frameTimer.current);
+        frameTimer.current = null;
+      }
 
       redraw();
     };
@@ -201,7 +215,6 @@ export default function useTouchSimulator(
     };
 
     setPayloadPreview(payload);
-    console.log("Final Payload:", payload);
 
     try {
       await axios.post(DEFAULT_ENDPOINT, payload, {
