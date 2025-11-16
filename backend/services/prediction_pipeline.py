@@ -1,7 +1,7 @@
 import pickle
 import numpy as np
 from tensorflow.keras.models import load_model
-from app.services.features_visualizer import FeatureEngineer
+from app.services.advanced_feature_extractor import FeatureEngineer
 from app.services.preprocess import Preprocessor
 
 

@@ -21,13 +21,13 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 
 from app.services.gesture_data_loader import GestureDataLoader
-from app.services.features_visualizer import ProductionFeatureExtractor
+from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 
 
 class TrainingPipeline:
     def __init__(self, max_timesteps: int = 200, verbose: bool = True):
         self.data_loader = GestureDataLoader()
-        self.feature_extractor = ProductionFeatureExtractor(max_timesteps=max_timesteps, verbose=verbose)
+        self.feature_extractor = AdvancedFeatureExtractor(max_timesteps=max_timesteps, verbose=verbose)
         self.max_timesteps = max_timesteps
         self.verbose = verbose
         self.label_encoder = LabelEncoder()
@@ -65,14 +65,34 @@ class TrainingPipeline:
     # 📊 رسم مصفوفة الالتباس
     # ======================================================
     def plot_confusion_matrix(self, y_true, y_pred, classes):
-        cm = confusion_matrix(y_true, y_pred)
+        from matplotlib import cm
+        
+        cmatrix = confusion_matrix(y_true, y_pred)
         plt.figure(figsize=(12, 8))
-        sns.heatmap(cm, annot=True, fmt='d', xticklabels=classes, yticklabels=classes, cmap='Blues')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
-        plt.title('Confusion Matrix')
+        
+        # اختيار ألوان من الأبيض للأحمر
+        cmap = cm.get_cmap('Reds')
+        
+        sns.heatmap(
+            cmatrix,
+            annot=True,
+            fmt='d',
+            xticklabels=classes,
+            yticklabels=classes,
+            cmap=cmap,
+            cbar=True,
+            annot_kws={"size": 12, "weight": "bold", "color": "black"},
+            linewidths=0.5,
+            linecolor='gray'
+        )
+        
+        plt.xlabel('Predicted', fontsize=14)
+        plt.ylabel('True', fontsize=14)
+        plt.title('Confusion Matrix', fontsize=16, fontweight='bold')
+        plt.tight_layout()
         plt.savefig('confusion_matrix.png', dpi=300, bbox_inches='tight')
         plt.show()
+
 
     # ======================================================
     # 📈 رسم منحنى التدريب

@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import List
 from app.services.gesture_data_loader import GestureDataLoader
-from app.services.features_visualizer import FeatureEngineerVisualizer
+from app.services.advanced_feature_extractor import FeatureEngineerVisualizer
 
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight

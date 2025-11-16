@@ -5,7 +5,7 @@ import traceback
 
 # ✅ استيراد الملفات الصحيحة
 from app.services.gesture_data_loader import GestureDataLoader
-from app.services.features_visualizer import ProductionFeatureExtractor
+from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 from app.services.training_pipeline import TrainingPipeline
 from app.services.test_model import main as test_main
 
@@ -50,7 +50,7 @@ def main(mode="train"):
         
         elif mode == "extract_adv":
             print("\n📊 Extracting Advanced Feature CSV...")
-            from app.services.advanced_feature_generator import StatisticalFeatureGenerator
+            from app.services.feature_generator import StatisticalFeatureGenerator
 
             generator = StatisticalFeatureGenerator(max_timesteps=50, verbose=True)
             generator.generate_features(
