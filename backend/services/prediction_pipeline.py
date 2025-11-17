@@ -1,126 +1,343 @@
+import os
 import pickle
 import numpy as np
+from typing import Dict, Any
+
 from tensorflow.keras.models import load_model
-from app.services.advanced_feature_extractor import FeatureEngineer
-from app.services.preprocess import Preprocessor
+from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 
 
 class PredictionPipeline:
     """
-    نسخة مطورة من واجهة TrainingPipeline، مخصصة للتنبؤ بالإيماءات القادمة من الفرونت إند.
-    تشمل:
-    - تحويل بيانات الفرونت إند لتشبه بيانات التدريب
-    - استخراج الميزات
-    - التطبيع باستخدام scaler المحفوظ
-    - التنبؤ بالحرف باستخدام النموذج والـ label_encoder
+    Prediction pipeline identical to training:
+    - Uses AdvancedFeatureExtractor
+    - No scaler
+    - Loads final keras model + label encoder
     """
 
     def __init__(self,
-                 model_path="arabic_gesture_cnn_final.h5",
-                 scaler_path="scaler.pkl",
-                 label_encoder_path="label_encoder.pkl",
-                 max_timesteps: int = 100):
+                 model_path: str = "arabic_gesture_cnn_final.h5",
+                 label_encoder_path: str = "label_encoder.pkl",
+                 max_timesteps: int = 200,
+                 verbose: bool = True):
+
         self.model_path = model_path
-        self.scaler_path = scaler_path
         self.label_encoder_path = label_encoder_path
         self.max_timesteps = max_timesteps
+        self.verbose = verbose
 
-        # تحميل المكونات
-        self.feature_engineer = FeatureEngineer(max_timesteps=self.max_timesteps)
-        self.model = self._load_model()
-        self.scaler = self._load_pickle(self.scaler_path)
-        self.label_encoder = self._load_pickle(self.label_encoder_path)
-        self.preprocessor = Preprocessor()
+        # Extractor identical to training
+        self.feature_extractor = AdvancedFeatureExtractor(
+            max_timesteps=max_timesteps,
+            verbose=False
+        )
 
-    # ================== أدوات التحميل ==================
-    def _load_model(self):
-        try:
-            model = load_model(self.model_path)
-            print(f"✅ Model loaded from {self.model_path}")
-            return model
-        except Exception as e:
-            raise RuntimeError(f"❌ Failed to load model: {e}")
+        # load model + labels
+        self.model = self._load_model(self.model_path)
+        self.label_encoder = self._load_pickle(self.label_encoder_path, required=True)
 
-    def _load_pickle(self, path):
-        try:
-            with open(path, "rb") as f:
-                return pickle.load(f)
-        except Exception as e:
-            raise RuntimeError(f"❌ Failed to load pickle file {path}: {e}")
+    # ---------------------------------------------
+    # helpers
+    # ---------------------------------------------
+    def _load_model(self, path: str):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found: {path}")
 
-    # ================== تحويل بيانات الفرونت إند ==================
-    def _convert_frontend_to_training_format(self, gesture_from_frontend: dict) -> dict:
-        """
-        تحويل بيانات الإيماءة القادمة من الفرونت إند إلى نفس شكل بيانات التدريب.
-        """
+        model = load_model(path)
+        if self.verbose:
+            print(f"✅ Loaded model from {path}")
+        return model
+
+    def _load_pickle(self, path: str, required: bool = True):
+        if not os.path.exists(path):
+            if required:
+                raise FileNotFoundError(f"Required file not found: {path}")
+            return None
+
+        with open(path, "rb") as f:
+            obj = pickle.load(f)
+
+        if self.verbose:
+            print(f"✅ Loaded pickle: {path}")
+
+        return obj
+
+    # ---------------------------------------------
+    # convert frontend data → training gesture format
+    # ---------------------------------------------
+    def _convert_frontend_to_training_format(self, gesture_from_frontend: Dict[str, Any]) -> Dict[str, Any]:
+
         frames_converted = []
         for frame in gesture_from_frontend.get("frames", []):
             frames_converted.append({
                 "frame_id": frame.get("frame_id"),
-                "timestamp": frame.get("ts"),
-                "points_count": len(frame.get("points", [])),
-                "raw_payload": {
-                    "ts": frame.get("ts"),
-                    "frame_id": frame.get("frame_id"),
-                    "points": frame.get("points", [])
-                },
-                "points": frame.get("points", [])
+                "timestamp": frame.get("ts") or frame.get("timestamp"),
+                "delta_ms": frame.get("delta_ms"),
+                "points": frame.get("points", []),
+                "raw_payload": frame
             })
 
         return {
-            "id": 0,
+            "id": gesture_from_frontend.get("id", 0),
             "character": None,
             "start_time": gesture_from_frontend.get("start_time"),
             "end_time": gesture_from_frontend.get("end_time"),
-            "duration_ms": gesture_from_frontend.get("duration_ms", 0),
+            "duration_ms": gesture_from_frontend.get("duration_ms"),
             "frame_count": len(frames_converted),
             "frames": frames_converted
         }
 
-    # ================== دالة التنبؤ الرئيسية ==================
-    def predict_gesture(self, gesture_from_frontend: dict):
-        """
-        يستقبل بيانات من الفرونت إند ويعيد التنبؤ بالحرف مع نسبة الثقة.
-        """
-        # 1️⃣ تحويل تنسيق البيانات
+    # ---------------------------------------------
+    # MAIN: prediction
+    # ---------------------------------------------
+    def predict_gesture(self, gesture_from_frontend: Dict[str, Any], return_topk: int = 5) -> Dict[str, Any]:
+
+        if not gesture_from_frontend.get("frames"):
+            raise ValueError("❌ Empty gesture: no frames received.")
+
+        # 1) convert to training-like format
         gesture_ready = self._convert_frontend_to_training_format(gesture_from_frontend)
 
-        # 2️⃣ تمريرها عبر Preprocessor
-        processed_gesture = self.preprocessor.process_gesture(gesture_ready)
-        if processed_gesture is None:
-            raise ValueError("❌ No valid frames found in gesture.")
+        # 2) extract features exactly like training
+        seq = self.feature_extractor._gesture_to_sequence(gesture_ready)
 
-        # 3️⃣ استخراج الميزات
-        seq = self.feature_engineer.extract_sequence_features(processed_gesture)
-        if seq is None:
-            raise ValueError("❌ Failed to extract sequence features.")
+        if seq is None or seq.size == 0:
+            raise ValueError("❌ Failed to extract features from gesture.")
 
-        T, F = seq.shape  # timesteps, features
+        feature_dim = seq.shape[1]
 
-        # 4️⃣ معالجة الحالات القصيرة (عدد فريمات قليل جدًا)
-        if T < 3:
-            while seq.shape[0] < 3:
-                seq = np.concatenate([seq, seq[-1:, :]], axis=0)
-            T, F = seq.shape
+        # --- padding إذا كانت قصيرة ---
+        if seq.shape[0] < self.max_timesteps:
+            pad_length = self.max_timesteps - seq.shape[0]
+            seq = np.vstack([seq, np.zeros((pad_length, feature_dim))])
 
-        # 5️⃣ تطبيع بنفس الـ scaler المستخدم أثناء التدريب
-        # X_flat = seq.reshape(1, -1)
-        # X_scaled = self.scaler.transform(X_flat)
-        # X_input = X_scaled.reshape(1, T, F)
-        X_scaled = np.array([self.scaler.transform(seq)])  # الشكل (1, timesteps, features)
-        X_input = X_scaled
+        # clean invalid values
+        seq = np.nan_to_num(seq, nan=0.0)
 
-        # 6️⃣ التنبؤ باستخدام النموذج
-        preds = self.model.predict(X_input)[0]
+        # تحقق من الشكل
+        if seq.shape != (self.max_timesteps, feature_dim):
+            raise RuntimeError(
+                f"Shape mismatch: got {seq.shape}, expected {(self.max_timesteps, feature_dim)}"
+            )
+
+        # prepare for model input
+        X_input = seq[np.newaxis, :, :]  # (1, T, F)
+
+        if self.verbose:
+            print(f"📐 Input shape = {X_input.shape}")
+
+        # 3) run model
+        preds = self.model.predict(X_input, verbose=0)[0]
+
         pred_idx = int(np.argmax(preds))
         confidence = float(preds[pred_idx])
 
-        # 7️⃣ تحويل التنبؤ إلى الحرف المقابل
-        predicted_char = self.label_encoder.inverse_transform([pred_idx])[0]
+        # 4) decode label
+        try:
+            predicted_char = self.label_encoder.inverse_transform([pred_idx])[0]
+        except Exception:
+            predicted_char = str(pred_idx)
+
+        # top-k
+        top_k = min(return_topk, len(preds))
+        top_indices = preds.argsort()[::-1][:top_k]
+
+        top = [
+            {
+                "index": int(i),
+                "label": self.label_encoder.inverse_transform([int(i)])[0],
+                "probability": float(preds[i])
+            }
+            for i in top_indices
+        ]
 
         return {
+            "predicted_index": pred_idx,
             "predicted_letter": predicted_char,
             "confidence": confidence,
-            "timesteps": int(T),
-            "num_features": int(F)
+            "probabilities": preds.tolist(),
+            "top": top,
+            "timesteps": self.max_timesteps,
+            "num_features": feature_dim
         }
+
+# import os
+# import pickle
+# import numpy as np
+# from typing import Dict, Any
+
+# from tensorflow.keras.models import load_model
+# from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
+
+
+# class PredictionPipeline:
+#     """
+#     Prediction pipeline identical to training:
+#     - Uses AdvancedFeatureExtractor
+#     - No scaler
+#     - Loads final keras model + label encoder
+#     - Supports gestures containing one or multiple letters
+#     """
+
+#     def __init__(self,
+#                  model_path: str = "arabic_gesture_cnn_final.h5",
+#                  label_encoder_path: str = "label_encoder.pkl",
+#                  max_timesteps: int = 200,
+#                  verbose: bool = True):
+
+#         self.model_path = model_path
+#         self.label_encoder_path = label_encoder_path
+#         self.max_timesteps = max_timesteps
+#         self.verbose = verbose
+
+#         # Extractor identical to training
+#         self.feature_extractor = AdvancedFeatureExtractor(
+#             max_timesteps=max_timesteps,
+#             verbose=False
+#         )
+
+#         # load model + labels
+#         self.model = self._load_model(self.model_path)
+#         self.label_encoder = self._load_pickle(self.label_encoder_path, required=True)
+
+#     # ---------------------------------------------
+#     # helpers
+#     # ---------------------------------------------
+#     def _load_model(self, path: str):
+#         if not os.path.exists(path):
+#             raise FileNotFoundError(f"Model file not found: {path}")
+
+#         model = load_model(path)
+#         if self.verbose:
+#             print(f"✅ Loaded model from {path}")
+#         return model
+
+#     def _load_pickle(self, path: str, required: bool = True):
+#         if not os.path.exists(path):
+#             if required:
+#                 raise FileNotFoundError(f"Required file not found: {path}")
+#             return None
+
+#         with open(path, "rb") as f:
+#             obj = pickle.load(f)
+
+#         if self.verbose:
+#             print(f"✅ Loaded pickle: {path}")
+
+#         return obj
+
+#     # ---------------------------------------------
+#     # convert frontend data → training gesture format
+#     # ---------------------------------------------
+#     def _convert_frontend_to_training_format(self, gesture_from_frontend: Dict[str, Any]) -> Dict[str, Any]:
+
+#         frames_converted = []
+#         for frame in gesture_from_frontend.get("frames", []):
+#             frames_converted.append({
+#                 "frame_id": frame.get("frame_id"),
+#                 "timestamp": frame.get("ts") or frame.get("timestamp"),
+#                 "delta_ms": frame.get("delta_ms"),
+#                 "points": frame.get("points", []),
+#                 "raw_payload": frame
+#             })
+
+#         return {
+#             "id": gesture_from_frontend.get("id", 0),
+#             "character": None,
+#             "start_time": gesture_from_frontend.get("start_time"),
+#             "end_time": gesture_from_frontend.get("end_time"),
+#             "duration_ms": gesture_from_frontend.get("duration_ms"),
+#             "frame_count": len(frames_converted),
+#             "frames": frames_converted
+#         }
+
+#     # ---------------------------------------------
+#     # MAIN: prediction
+#     # ---------------------------------------------
+#     def predict_gesture(self, gesture_from_frontend: Dict[str, Any], return_topk: int = 5) -> Dict[str, Any]:
+
+#         if not gesture_from_frontend.get("frames"):
+#             raise ValueError("❌ Empty gesture: no frames received.")
+
+#         # 1) convert to training-like format
+#         gesture_ready = self._convert_frontend_to_training_format(gesture_from_frontend)
+
+#         # 2) extract features exactly like training
+#         seq = self.feature_extractor._gesture_to_sequence(gesture_ready)
+
+#         if seq is None or seq.size == 0:
+#             raise ValueError("❌ Failed to extract features from gesture.")
+
+#         feature_dim = seq.shape[1]
+#         seq_length = seq.shape[0]
+
+#         # --- sliding window parameters ---
+#         window_size = self.max_timesteps
+#         stride = max(1, window_size // 2)  # 50% overlap
+
+#         predicted_sequence = []
+#         confidence_sequence = []
+#         probability_sequence = []
+
+#         for start in range(0, seq_length, stride):
+#             end = start + window_size
+#             window_seq = seq[start:end]
+
+#             # padding إذا كانت قصيرة
+#             if window_seq.shape[0] < window_size:
+#                 pad_length = window_size - window_seq.shape[0]
+#                 window_seq = np.vstack([window_seq, np.zeros((pad_length, feature_dim))])
+
+#             # clean invalid values
+#             window_seq = np.nan_to_num(window_seq, nan=0.0)
+#             X_input = window_seq[np.newaxis, :, :]  # (1, T, F)
+
+#             if self.verbose:
+#                 print(f"📐 Window input shape = {X_input.shape}")
+
+#             # 3) run model
+#             preds = self.model.predict(X_input, verbose=0)[0]
+
+#             pred_idx = int(np.argmax(preds))
+#             confidence = float(preds[pred_idx])
+#             predicted_char = self.label_encoder.inverse_transform([pred_idx])[0]
+
+#             # حفظ النتائج لكل نافذة
+#             predicted_sequence.append(predicted_char)
+#             confidence_sequence.append(confidence)
+#             probability_sequence.append(preds.tolist())  # softmax لكل حرف
+
+#         # --- دمج النتائج للتخلص من التكرار الناجم عن النوافذ المتداخلة ---
+#         final_sequence = []
+#         final_confidences = []
+#         final_probabilities = []
+#         prev_char = None
+
+#         for c, conf, prob in zip(predicted_sequence, confidence_sequence, probability_sequence):
+#             if c != prev_char:
+#                 final_sequence.append(c)
+#                 final_confidences.append(conf)
+#                 final_probabilities.append(prob)
+#                 prev_char = c
+
+#         # --- top-k من آخر نافذة ---
+#         last_preds = preds
+#         top_k = min(return_topk, len(last_preds))
+#         top_indices = last_preds.argsort()[::-1][:top_k]
+#         top = [
+#             {
+#                 "index": int(i),
+#                 "label": self.label_encoder.inverse_transform([int(i)])[0],
+#                 "probability": float(last_preds[i])
+#             }
+#             for i in top_indices
+#         ]
+
+#         return {
+#             "predicted_sequence": final_sequence,        # تسلسل الحروف
+#             "confidences": final_confidences,           # ثقة كل حرف
+#             "probabilities": final_probabilities,       # احتمالات كل حرف لكل نافذة
+#             "top": top,                                 # top-k من آخر نافذة
+#             "timesteps": self.max_timesteps,
+#             "num_features": feature_dim
+#         }

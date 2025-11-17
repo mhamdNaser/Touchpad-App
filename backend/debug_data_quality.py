@@ -2,7 +2,7 @@
 import numpy as np
 import pickle
 from app.services.gesture_data_loader import GestureDataLoader
-from app.services.advanced_feature_extractor import FeatureEngineerVisualizer
+from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 
 def analyze_data_quality():
     """تحليل جودة البيانات الأصلية"""

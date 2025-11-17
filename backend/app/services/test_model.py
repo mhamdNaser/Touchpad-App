@@ -91,7 +91,7 @@ def main():
     # -------------------------
     # 3) Load final model
     # -------------------------
-    model_file = "arabic_gesture_cnn_final.h5"   # الأفضل للاختبار
+    model_file = "arabic_gesture_cnn_final.keras"   # الأفضل للاختبار
     if not os.path.exists(model_file):
         raise FileNotFoundError(f"❌ {model_file} not found!")
 

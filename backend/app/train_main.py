@@ -5,7 +5,7 @@ import traceback
 
 # ✅ استيراد الملفات الصحيحة
 from app.services.gesture_data_loader import GestureDataLoader
-from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
+from app.other_services.feature_generator import StatisticalFeatureGenerator
 from app.services.training_pipeline import TrainingPipeline
 from app.services.test_model import main as test_main
 
@@ -34,7 +34,7 @@ def main(mode="train"):
             
             # التحقق من وجود الملفات المطلوبة
             required_files = [
-                "arabic_gesture_cnn_best.h5", 
+                "arabic_gesture_cnn_best.keras", 
                 "label_encoder.pkl",
                 "X_test.pkl",
                 "y_test.pkl"
@@ -50,13 +50,10 @@ def main(mode="train"):
         
         elif mode == "extract_adv":
             print("\n📊 Extracting Advanced Feature CSV...")
-            from app.services.feature_generator import StatisticalFeatureGenerator
-
-            generator = StatisticalFeatureGenerator(max_timesteps=50, verbose=True)
-            generator.generate_features(
+            generator = StatisticalFeatureGenerator(max_timesteps=200, verbose=True)
+            generator.process_gestures(
                 gestures_data,
-                out_csv="ADVANCED_features.csv",
-                format="wide"
+                out_csv="ADVANCED_features.csv"
             )
             print("✅ Advanced feature extraction completed.")
 

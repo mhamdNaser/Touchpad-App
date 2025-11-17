@@ -2,10 +2,7 @@
 import json
 import pickle
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
-from typing import List
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.model_selection import train_test_split
@@ -20,6 +17,10 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLRO
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 
+from app.services.visualization_utils import (
+    plot_confusion_matrix,
+    plot_training_history
+)
 from app.services.gesture_data_loader import GestureDataLoader
 from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 
@@ -60,67 +61,6 @@ class TrainingPipeline:
         if self.verbose:
             print(f"✅ Built CNN model with input shape {input_shape} and {num_classes} classes")
         return model
-
-    # ======================================================
-    # 📊 رسم مصفوفة الالتباس
-    # ======================================================
-    def plot_confusion_matrix(self, y_true, y_pred, classes):
-        from matplotlib import cm
-        
-        cmatrix = confusion_matrix(y_true, y_pred)
-        plt.figure(figsize=(12, 8))
-        
-        # اختيار ألوان من الأبيض للأحمر
-        cmap = cm.get_cmap('Reds')
-        
-        sns.heatmap(
-            cmatrix,
-            annot=True,
-            fmt='d',
-            xticklabels=classes,
-            yticklabels=classes,
-            cmap=cmap,
-            cbar=True,
-            annot_kws={"size": 12, "weight": "bold", "color": "black"},
-            linewidths=0.5,
-            linecolor='gray'
-        )
-        
-        plt.xlabel('Predicted', fontsize=14)
-        plt.ylabel('True', fontsize=14)
-        plt.title('Confusion Matrix', fontsize=16, fontweight='bold')
-        plt.tight_layout()
-        plt.savefig('confusion_matrix.png', dpi=300, bbox_inches='tight')
-        plt.show()
-
-
-    # ======================================================
-    # 📈 رسم منحنى التدريب
-    # ======================================================
-    def plot_training_history(self, history):
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-        
-        # رسم دقة التدريب والتحقق
-        ax1.plot(history.history['accuracy'], label='Training Accuracy')
-        ax1.plot(history.history['val_accuracy'], label='Validation Accuracy')
-        ax1.set_title('Model Accuracy')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Accuracy')
-        ax1.legend()
-        ax1.grid(True)
-        
-        # رسم فقدان التدريب والتحقق
-        ax2.plot(history.history['loss'], label='Training Loss')
-        ax2.plot(history.history['val_loss'], label='Validation Loss')
-        ax2.set_title('Model Loss')
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Loss')
-        ax2.legend()
-        ax2.grid(True)
-        
-        plt.tight_layout()
-        plt.savefig('training_history.png', dpi=300, bbox_inches='tight')
-        plt.show()
 
     # ======================================================
     # 🔍 فحص جودة البيانات قبل التدريب
@@ -182,16 +122,48 @@ class TrainingPipeline:
         print(f"🔠 Class names: {self.label_encoder.classes_}")
 
         # 4️⃣ تقسيم البيانات
-        X_train, X_temp, y_train, y_temp = train_test_split(
-            X, y_encoded, test_size=0.3, stratify=y_encoded, random_state=42
-        )
-        X_val, X_test, y_val, y_test = train_test_split(
-            X_temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42
-        )
+        X_train, y_train = [], []
+        X_test, y_test = [], []
+
+        unique_classes = np.unique(y_encoded)
+
+        for cls in unique_classes:
+            indices = np.where(y_encoded == cls)[0]
+            np.random.shuffle(indices)
+
+            n_total = len(indices)
+            n_train = int(n_total * 0.8)
+
+            train_idx = indices[:n_train]
+            test_idx = indices[n_train:]
+
+            X_train.append(X[train_idx])
+            y_train.append(y_encoded[train_idx])
+
+            X_test.append(X[test_idx])
+            y_test.append(y_encoded[test_idx])
+
+        # دمج كل الحروف بعد التقسيم
+        X_train = np.concatenate(X_train)
+        y_train = np.concatenate(y_train)
+        X_test = np.concatenate(X_test)
+        y_test = np.concatenate(y_test)
+
+        # عمل Shuffle
+        shuffle_train = np.random.permutation(len(X_train))
+        shuffle_test = np.random.permutation(len(X_test))
+
+        X_train = X_train[shuffle_train]
+        y_train = y_train[shuffle_train]
+        X_test = X_test[shuffle_test]
+        y_test = y_test[shuffle_test]
+
+        print("📌 Strict split done successfully:")
+        print(f"   → Train gestures: {len(X_train)}")
+        print(f"   → Test gestures: {len(X_test)}")
 
         # 5️⃣ تحويل إلى one-hot
         y_train_cat = to_categorical(y_train, num_classes=num_classes)
-        y_val_cat = to_categorical(y_val, num_classes=num_classes)
         y_test_cat = to_categorical(y_test, num_classes=num_classes)
 
         # 6️⃣ حساب أوزان الفئات
@@ -214,7 +186,7 @@ class TrainingPipeline:
 
         # 8️⃣ Callbacks
         early_stop = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True, verbose=1)
-        checkpoint = ModelCheckpoint('arabic_gesture_cnn_best.h5', monitor='val_accuracy', save_best_only=True, verbose=1)
+        checkpoint = ModelCheckpoint('arabic_gesture_cnn_best.keras', monitor='val_accuracy', save_best_only=True, verbose=1)
         reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=1e-7, verbose=1)
 
         # 9️⃣ التدريب
@@ -224,7 +196,7 @@ class TrainingPipeline:
 
         history = model.fit(
             X_train, y_train_cat,
-            validation_data=(X_val, y_val_cat),
+            validation_split=0.2,
             epochs=100,
             batch_size=batch_size,
             callbacks=[early_stop, checkpoint, reduce_lr],
@@ -242,11 +214,11 @@ class TrainingPipeline:
 
         print("\n📊 Classification report:")
         print(classification_report(y_test, y_pred, target_names=self.label_encoder.classes_, zero_division=0))
-        self.plot_confusion_matrix(y_test, y_pred, self.label_encoder.classes_)
-        self.plot_training_history(history)
+        plot_confusion_matrix(y_test, y_pred, self.label_encoder.classes_)
+        plot_training_history(history)
 
         # 11️⃣ حفظ النموذج والمكونات
-        model.save("arabic_gesture_cnn_final.h5", save_format='h5')
+        model.save("arabic_gesture_cnn_final.keras", save_format='keras')
         with open("label_encoder.pkl", "wb") as f:
             pickle.dump(self.label_encoder, f)
         with open("X_test.pkl", "wb") as f:
