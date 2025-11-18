@@ -43,8 +43,7 @@ uvicorn main:app --reload
 ###### to run training or testing from main file 
 
 python -m app.train_main train
-python -m app.train_main test
-python -m app.train_main extract_adv
+python -m app.train_main analyze
 
 
 python feature_analysis.py

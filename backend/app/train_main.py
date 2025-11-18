@@ -5,9 +5,8 @@ import traceback
 
 # ✅ استيراد الملفات الصحيحة
 from app.services.gesture_data_loader import GestureDataLoader
-from app.other_services.feature_generator import StatisticalFeatureGenerator
+from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 from app.services.training_pipeline import TrainingPipeline
-from app.services.test_model import main as test_main
 
 
 def main(mode="train"):
@@ -27,35 +26,15 @@ def main(mode="train"):
             pipeline = TrainingPipeline(max_timesteps=50)
             result = pipeline.train_model()
             print(f"✅ Training completed. Test accuracy: {result['test_accuracy']:.3f}")
-
-        # =====  الاختبار =====
-        elif mode == "test":
-            print("\n🧪 Starting Model Testing...")
-            
-            # التحقق من وجود الملفات المطلوبة
-            required_files = [
-                "arabic_gesture_cnn_best.keras", 
-                "label_encoder.pkl",
-                "X_test.pkl",
-                "y_test.pkl"
-            ]
-            
-            missing_files = [f for f in required_files if not os.path.exists(f)]
-            if missing_files:
-                print(f"❌ Missing required files: {missing_files}")
-                print("💡 Please run training first: python -m app.train_main train")
-                return
-            
-            test_main()
         
-        elif mode == "extract_adv":
+        elif mode == "analyze":
             print("\n📊 Extracting Advanced Feature CSV...")
-            generator = StatisticalFeatureGenerator(max_timesteps=200, verbose=True)
-            generator.process_gestures(
-                gestures_data,
-                out_csv="ADVANCED_features.csv"
-            )
+            extractor = AdvancedFeatureExtractor(max_timesteps=200, verbose=True)
+            extractor.save_gestures_to_csv(gestures_data, out_csv="ADVANCED_features.csv")
             print("✅ Advanced feature extraction completed.")
+
+            print("\n📈 Plotting Feature Variance...")
+            extractor.plot_feature_variance(gestures_data)
 
         else:
             print(f"❌ Unknown mode '{mode}'.")
