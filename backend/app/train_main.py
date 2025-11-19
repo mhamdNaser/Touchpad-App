@@ -5,7 +5,6 @@ import traceback
 
 # ✅ استيراد الملفات الصحيحة
 from app.services.gesture_data_loader import GestureDataLoader
-from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 from app.services.training_pipeline import TrainingPipeline
 
 
@@ -23,18 +22,10 @@ def main(mode="train"):
         # =====  التدريب =====
         if mode == "train":
             print("\n🏋️ Starting Model Training...")
-            pipeline = TrainingPipeline(max_timesteps=50)
+            # ⚠️ إزالة max_timesteps لأن TrainingPipeline الجديد ما بده إياه
+            pipeline = TrainingPipeline()  # بدون parameters
             result = pipeline.train_model()
             print(f"✅ Training completed. Test accuracy: {result['test_accuracy']:.3f}")
-        
-        elif mode == "analyze":
-            print("\n📊 Extracting Advanced Feature CSV...")
-            extractor = AdvancedFeatureExtractor(max_timesteps=200, verbose=True)
-            extractor.save_gestures_to_csv(gestures_data, out_csv="ADVANCED_features.csv")
-            print("✅ Advanced feature extraction completed.")
-
-            print("\n📈 Plotting Feature Variance...")
-            extractor.plot_feature_variance(gestures_data)
 
         else:
             print(f"❌ Unknown mode '{mode}'.")

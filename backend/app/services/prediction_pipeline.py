@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 from typing import Dict, Any, List, Optional
 from tensorflow.keras.models import load_model
+from sklearn.preprocessing import StandardScaler
 
 from app.services.gesture_data_loader import GestureDataLoader
 from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
@@ -12,39 +13,27 @@ from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 
 class PredictionPipeline:
     """
-    Enhanced prediction pipeline aligned with training:
-    - Uses GestureDataLoader to process frontend gestures
-    - Uses AdvancedFeatureExtractor for FULL feature extraction
-    - Loads trained Keras model + label encoder
-    - Added error handling and quality checks
+    Prediction pipeline aligned with TRAINING (Global Features)
     """
     def __init__(
         self,
         model_path: str = "ai_model/final_model.keras",
         label_encoder_path: str = "ai_model/label_encoder.pkl",
-        max_timesteps: int = 200,
+        scaler_path: str = "ai_model/scaler.pkl",
         verbose: bool = True
     ):
         self.model_path = model_path
         self.label_encoder_path = label_encoder_path
-        self.max_timesteps = max_timesteps
+        self.scaler_path = scaler_path
         self.verbose = verbose
 
-        # Data loader identical to training
-        self.data_loader = GestureDataLoader()
-
-        # Feature extractor identical to training
-        self.feature_extractor = AdvancedFeatureExtractor(
-            max_timesteps=max_timesteps,
-            verbose=False
-        )
-
-        # Load model + label encoder
+        # Load all trained components
         self.model = self._load_model(self.model_path)
         self.label_encoder = self._load_pickle(self.label_encoder_path, required=True)
+        self.scaler = self._load_pickle(self.scaler_path, required=True)
         
-        # Get expected feature dimension
-        self.expected_feature_dim = self.feature_extractor.get_feature_dimension()
+        # Feature extractor for GLOBAL features (same as training)
+        self.feature_extractor = AdvancedFeatureExtractor(verbose=False)
 
     # ---------------------------------------
     # Loading helpers
@@ -101,27 +90,6 @@ class PredictionPipeline:
             quality_report["is_valid"] = False
             quality_report["errors"].append(f"Too few points: {total_points} (minimum: 5)")
         
-        # Check frame timing
-        timestamps = [f.get("timestamp", 0) for f in frames if f.get("timestamp")]
-        if len(timestamps) > 1:
-            duration = max(timestamps) - min(timestamps)
-            if duration < 10:  # Very short gesture (ms)
-                quality_report["warnings"].append(f"Very short gesture duration: {duration}ms")
-        
-        # Check point distribution
-        all_points = []
-        for frame in frames:
-            all_points.extend(frame.get("points", []))
-        
-        if all_points:
-            xs = [p.get("x", 0) for p in all_points]
-            ys = [p.get("y", 0) for p in all_points]
-            
-            if max(xs) - min(xs) < 0.01:  # Very small movement in X
-                quality_report["warnings"].append("Very small movement in X direction")
-            if max(ys) - min(ys) < 0.01:  # Very small movement in Y
-                quality_report["warnings"].append("Very small movement in Y direction")
-        
         return quality_report
 
     # ---------------------------------------
@@ -143,81 +111,64 @@ class PredictionPipeline:
                 processed_points.append(processed_point)
             
             frames_converted.append({
-                "frame_id": frame.get("frame_id"),
                 "timestamp": frame.get("ts") or frame.get("timestamp") or 0,
-                "delta_ms": frame.get("delta_ms") or 16,  # Default 16ms if missing
+                "delta_ms": frame.get("delta_ms") or 16,
                 "points": processed_points
             })
 
         return {
-            "id": gesture_from_frontend.get("id", 0),
-            "character": None,   # prediction will fill this
+            "frames": frames_converted,
+            "duration_ms": gesture_from_frontend.get("duration_ms", 0),
             "start_time": gesture_from_frontend.get("start_time"),
-            "end_time": gesture_from_frontend.get("end_time"),
-            "duration_ms": gesture_from_frontend.get("duration_ms"),
-            "frame_count": len(frames_converted),
-            "frames": frames_converted
+            "end_time": gesture_from_frontend.get("end_time")
         }
 
     # ---------------------------------------
-    # Feature Processing & Validation
+    # Feature Processing (GLOBAL FEATURES)
     # ---------------------------------------
     def _process_features(self, gesture: Dict) -> np.ndarray:
-        """معالجة الميزات مع التحقق من الجودة"""
-        # Extract features
-        seq = self.feature_extractor.gesture_to_full_feature_vector(gesture)
+        """معالجة الميزات العالمية (2D) مثل التدريب"""
+        # Extract GLOBAL features (not temporal sequence)
+        features = self.feature_extractor.gesture_to_feature_vector(gesture)
 
-        if seq is None or seq.size == 0:
+        if features is None or features.size == 0:
             raise ValueError("❌ Failed to extract features from gesture")
 
         # Check feature dimension
-        timesteps, feature_dim = seq.shape
-        if feature_dim != self.expected_feature_dim:
-            raise ValueError(f"❌ Feature dimension mismatch: expected {self.expected_feature_dim}, got {feature_dim}")
+        if len(features.shape) != 1:
+            raise ValueError(f"❌ Expected 1D features, got shape: {features.shape}")
 
-        # Pad/truncate to max_timesteps
-        if timesteps < self.max_timesteps:
-            padding = np.zeros((self.max_timesteps - timesteps, feature_dim))
-            seq = np.vstack([seq, padding])
-        else:
-            seq = seq[:self.max_timesteps]
+        # Apply scaling (same as training)
+        features_scaled = self.scaler.transform(features.reshape(1, -1))
 
-        # Handle NaN values
-        seq = np.nan_to_num(seq, nan=0.0, posinf=1.0, neginf=-1.0)
-
-        # Final shape validation
-        if seq.shape != (self.max_timesteps, feature_dim):
-            raise RuntimeError(f"❌ Shape mismatch: got {seq.shape}, expected {(self.max_timesteps, feature_dim)}")
-
-        return seq
+        return features_scaled
 
     # ---------------------------------------
     # Prediction with Confidence Scoring
     # ---------------------------------------
     def _calculate_confidence_score(self, probabilities: np.ndarray, top_prediction: float) -> float:
         """حساب درجة الثقة بناءً على توزيع الاحتمالات"""
-        # Normal confidence (highest probability)
         confidence = top_prediction
         
         # Apply penalty if second-best is too close
         sorted_probs = np.sort(probabilities)[::-1]
         if len(sorted_probs) > 1:
             margin = sorted_probs[0] - sorted_probs[1]
-            if margin < 0.3:  # If top two are close
-                confidence *= 0.7  # Reduce confidence
+            if margin < 0.3:
+                confidence *= 0.7
         
         # Apply penalty for low maximum probability
         if top_prediction < 0.6:
             confidence *= 0.8
         
-        return min(confidence, 1.0)  # Cap at 1.0
+        return min(confidence, 1.0)
 
     # ---------------------------------------
     # MAIN PREDICTION
     # ---------------------------------------
-    def predict_gesture(self, gesture_from_frontend: Dict[str, Any], return_topk: int = 5) -> Dict[str, Any]:
+    def predict_gesture(self, gesture_from_frontend: Dict[str, Any], return_topk: int = 3) -> Dict[str, Any]:
         """
-        التنبؤ بالإيماءة مع معالجة محسنة للأخطاء
+        التنبؤ بالإيماءة باستخدام الميزات العالمية
         """
         try:
             # Input validation
@@ -245,27 +196,23 @@ class PredictionPipeline:
                     "quality_report": quality_report
                 }
 
-            # 3) Process features
-            seq = self._process_features(gesture_ready)
+            # 3) Process GLOBAL features
+            features = self._process_features(gesture_ready)
 
-            # 4) Prepare for model
-            X_input = seq[np.newaxis, :, :]  # (1, T, F)
-            
             if self.verbose:
-                print(f"📐 Input shape to model: {X_input.shape}")
-                print(f"⚠️ Quality warnings: {quality_report['warnings']}")
+                print(f"📐 Input shape to model: {features.shape}")
 
-            # 5) Predict
-            preds = self.model.predict(X_input, verbose=0)[0]
+            # 4) Predict
+            preds = self.model.predict(features, verbose=0)[0]
 
-            # 6) Process results
+            # 5) Process results
             pred_idx = int(np.argmax(preds))
             top_probability = float(preds[pred_idx])
             
             # Calculate enhanced confidence
             confidence = self._calculate_confidence_score(preds, top_probability)
 
-            # 7) Decode label
+            # 6) Decode label
             try:
                 predicted_char = self.label_encoder.inverse_transform([pred_idx])[0]
             except Exception as e:
@@ -273,7 +220,7 @@ class PredictionPipeline:
                 if self.verbose:
                     print(f"⚠️ Label decoding warning: {e}")
 
-            # 8) Top-k predictions
+            # 7) Top-k predictions
             top_k = min(return_topk, len(preds))
             top_indices = preds.argsort()[::-1][:top_k]
 
@@ -285,24 +232,23 @@ class PredictionPipeline:
                     label = f"Class_{i}"
                 
                 top_predictions.append({
-                    "index": int(i),
-                    "label": label,
+                    "letter": label,
                     "probability": float(preds[i])
                 })
 
-            # 9) Return comprehensive result
+            # 8) Return comprehensive result
             result = {
                 "success": True,
-                "predicted_index": pred_idx,
                 "predicted_letter": predicted_char,
-                "confidence": confidence,
-                "raw_confidence": top_probability,  # Original probability
-                "probabilities": preds.tolist(),
-                "top": top_predictions,
-                "timesteps": self.max_timesteps,
-                "num_features": self.expected_feature_dim,
-                "quality_report": quality_report,
-                "feature_shape": X_input.shape
+                "confidence": round(confidence, 3),
+                "raw_confidence": round(top_probability, 3),
+                "top_predictions": top_predictions,
+                "quality_report": {
+                    "is_valid": quality_report["is_valid"],
+                    "warnings": quality_report["warnings"],
+                    "frame_count": len(gesture_ready.get("frames", [])),
+                    "total_points": sum(len(f.get("points", [])) for f in gesture_ready.get("frames", []))
+                }
             }
             
             if self.verbose:
@@ -331,28 +277,7 @@ class PredictionPipeline:
         return {
             "model_path": self.model_path,
             "input_shape": self.model.input_shape,
-            "max_timesteps": self.max_timesteps,
-            "feature_dimension": self.expected_feature_dim,
             "num_classes": len(self.label_encoder.classes_),
-            "classes": self.label_encoder.classes_.tolist()
+            "classes": self.label_encoder.classes_.tolist(),
+            "feature_names": self.feature_extractor.get_feature_names()
         }
-
-    def get_feature_names(self) -> List[str]:
-        """الحصول على أسماء الميزات المستخدمة"""
-        return self.feature_extractor.get_feature_names()
-
-    def batch_predict(self, gestures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """التنبؤ بعدة إيماءات دفعة واحدة"""
-        return [self.predict_gesture(gesture) for gesture in gestures]
-
-
-# Example usage and testing
-if __name__ == "__main__":
-    # Test the pipeline
-    pipeline = PredictionPipeline(verbose=True)
-    
-    print("🔍 Model Info:")
-    print(pipeline.get_model_info())
-    
-    print("📊 Feature Names:")
-    print(pipeline.get_feature_names())
