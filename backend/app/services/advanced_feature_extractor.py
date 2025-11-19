@@ -1,151 +1,292 @@
-from typing import List, Dict, Any
+# app/services/advanced_feature_extractor.py
+from typing import List, Dict, Any, Tuple
 import numpy as np
 import csv
 import matplotlib.pyplot as plt
 
 class AdvancedFeatureExtractor:
-    """
-    Extracts advanced gesture features:
-    - spatial (mean, std, min, max)
-    - velocity, acceleration
-    - cumulative distance, radial distance
-    - stroke progress & length
-    """
-    def __init__(self, max_timesteps:int=200, verbose:bool=False):
+    def __init__(self, max_timesteps: int = 200, verbose: bool = False):
         self.max_timesteps = max_timesteps
         self.verbose = verbose
+        
+        # الميزات المحسنة
         self.per_frame_names = [
-            "x_mean","x_std","y_mean","y_std","x_min","x_max","y_min","y_max",
-            "vx","vy","ax","ay","cumulative_distance","stroke_progress","stroke_length",
-            "delta_s","radial_distance"
+            # الميزات الحركية عالية التباين
+            "velocity_magnitude", "acceleration_magnitude",
+            "angular_velocity", "curvature",
+            
+            # الميزات المكانية المفيدة
+            "centroid_x", "centroid_y",
+            "spread_x", "spread_y",
+            
+            # الميزات الزمنية
+            "progress", "time_from_start",
+            
+            # الميزات الشكلية المحسنة
+            "compactness", "aspect_ratio"
         ]
 
-    def _extract_frame_features(self, frame, prev_frame, prev_velocity, cumulative_dist, centroid):
-        pts = frame.get("points",[]) or []
-        delta_s = max(frame.get("delta_ms",1)/1000.0, 1e-6)
+    def _compute_curvature(self, points: List[Dict]) -> float:
+        """حساب انحناء الرسمة"""
+        if len(points) < 3:
+            return 0.0
+        
+        xs = np.array([p["x"] for p in points])
+        ys = np.array([p["y"] for p in points])
+        
+        dx_dt = np.gradient(xs)
+        dy_dt = np.gradient(ys)
+        d2x_dt2 = np.gradient(dx_dt)
+        d2y_dt2 = np.gradient(dy_dt)
+        
+        numerator = np.abs(dx_dt * d2y_dt2 - dy_dt * d2x_dt2)
+        denominator = np.power(dx_dt**2 + dy_dt**2, 1.5)
+        
+        curvature = np.mean(numerator / (denominator + 1e-8))
+        return float(curvature)
+
+    def _compute_compactness(self, points: List[Dict]) -> float:
+        """حساب كثافة الرسمة"""
+        if len(points) < 3:
+            return 0.0
+        
+        xs = np.array([p["x"] for p in points])
+        ys = np.array([p["y"] for p in points])
+        
+        area = 0.5 * np.abs(np.dot(xs, np.roll(ys, 1)) - np.dot(ys, np.roll(xs, 1)))
+        
+        dx = np.diff(xs, append=xs[0])
+        dy = np.diff(ys, append=ys[0])
+        perimeter = np.sum(np.sqrt(dx**2 + dy**2))
+        
+        if perimeter == 0:
+            return 0.0
+            
+        compactness = (4 * np.pi * area) / (perimeter ** 2)
+        return float(compactness)
+
+    def _compute_aspect_ratio(self, points: List[Dict]) -> float:
+        """حساب نسبة الطول إلى العرض"""
+        if not points:
+            return 1.0
+            
+        xs = np.array([p["x"] for p in points])
+        ys = np.array([p["y"] for p in points])
+        
+        width = np.max(xs) - np.min(xs)
+        height = np.max(ys) - np.min(ys)
+        
+        if height == 0:
+            return float('inf') if width > 0 else 1.0
+            
+        return float(width / height)
+
+    def _extract_optimized_features(self, frame: Dict, prev_frame: Dict, 
+                                  prev_velocity: np.ndarray, 
+                                  cumulative_length: float,
+                                  start_time: float,
+                                  global_centroid: np.ndarray) -> Dict:
+        """استخراج الميزات عالية التباين فقط"""
+        pts = frame.get("points", [])
+        timestamp = frame.get("timestamp", 0)
+        delta_s = max(frame.get("delta_ms", 1) / 1000.0, 1e-6)
 
         if not pts:
             return {name: 0.0 for name in self.per_frame_names}
 
-        x = np.array([p["x"] for p in pts], dtype=np.float32)
-        y = np.array([p["y"] for p in pts], dtype=np.float32)
-        x_mean, x_std = float(np.mean(x)), float(np.std(x))
-        y_mean, y_std = float(np.mean(y)), float(np.std(y))
-        x_min, x_max = float(np.min(x)), float(np.max(x))
-        y_min, y_max = float(np.min(y)), float(np.max(y))
-
-        # السرعة
-        if prev_frame:
+        x_vals = np.array([p["x"] for p in pts])
+        y_vals = np.array([p["y"] for p in pts])
+        
+        centroid_x, centroid_y = float(np.mean(x_vals)), float(np.mean(y_vals))
+        spread_x, spread_y = float(np.std(x_vals)), float(np.std(y_vals))
+        
+        velocity_magnitude = 0.0
+        acceleration_magnitude = 0.0
+        angular_velocity = 0.0
+        
+        if prev_frame is not None:
             prev_pts = prev_frame.get("points", [])
-            prev_x = np.mean([p["x"] for p in prev_pts]) if prev_pts else x_mean
-            prev_y = np.mean([p["y"] for p in prev_pts]) if prev_pts else y_mean
-            vx = (x_mean - prev_x)/delta_s
-            vy = (y_mean - prev_y)/delta_s
-        else:
-            prev_x, prev_y = x_mean, y_mean
-            vx, vy = 0.0, 0.0
+            if prev_pts:
+                prev_x = np.mean([p["x"] for p in prev_pts])
+                prev_y = np.mean([p["y"] for p in prev_pts])
+                
+                velocity_x = (centroid_x - prev_x) / delta_s
+                velocity_y = (centroid_y - prev_y) / delta_s
+                velocity_magnitude = np.sqrt(velocity_x**2 + velocity_y**2)
+                
+                if prev_velocity is not None:
+                    acceleration_x = (velocity_x - prev_velocity[0]) / delta_s
+                    acceleration_y = (velocity_y - prev_velocity[1]) / delta_s
+                    acceleration_magnitude = np.sqrt(acceleration_x**2 + acceleration_y**2)
+                
+                if len(pts) > 1 and len(prev_pts) > 1:
+                    current_angle = np.arctan2(pts[-1]["y"] - pts[0]["y"], 
+                                             pts[-1]["x"] - pts[0]["x"])
+                    prev_angle = np.arctan2(prev_pts[-1]["y"] - prev_pts[0]["y"], 
+                                          prev_pts[-1]["x"] - prev_pts[0]["x"])
+                    angular_velocity = (current_angle - prev_angle) / delta_s
 
-        # التسارع
-        if prev_velocity is not None:
-            ax = (vx - prev_velocity[0])/delta_s
-            ay = (vy - prev_velocity[1])/delta_s
-        else:
-            ax, ay = 0.0, 0.0
+        curvature = self._compute_curvature(pts)
+        compactness = self._compute_compactness(pts)
+        aspect_ratio = self._compute_aspect_ratio(pts)
 
-        # المسافات
-        dist = np.sqrt((x_mean - prev_x)**2 + (y_mean - prev_y)**2) if prev_frame else 0.0
-        cumulative_dist += dist
-        stroke_length = cumulative_dist
-        stroke_progress = cumulative_dist
+        time_from_start = (timestamp - start_time) / 1000.0
+        
+        if prev_frame is not None:
+            prev_centroid_x = np.mean([p["x"] for p in prev_frame.get("points", [])])
+            prev_centroid_y = np.mean([p["y"] for p in prev_frame.get("points", [])])
+            segment_length = np.sqrt((centroid_x - prev_centroid_x)**2 + 
+                                   (centroid_y - prev_centroid_y)**2)
+            cumulative_length += segment_length
 
-        cx, cy = centroid
-        radial_distance = float(np.sqrt((x_mean - cx)**2 + (y_mean - cy)**2))
+        progress = cumulative_length
 
         return {
-            "x_mean":x_mean, "x_std":x_std, "y_mean":y_mean, "y_std":y_std,
-            "x_min":x_min, "x_max":x_max, "y_min":y_min, "y_max":y_max,
-            "vx":vx, "vy":vy, "ax":ax, "ay":ay,
-            "cumulative_distance":cumulative_dist,
-            "stroke_progress":stroke_progress,
-            "stroke_length":stroke_length,
-            "delta_s":delta_s,
-            "radial_distance":radial_distance
+            "velocity_magnitude": velocity_magnitude,
+            "acceleration_magnitude": acceleration_magnitude,
+            "angular_velocity": angular_velocity,
+            "curvature": curvature,
+            
+            "centroid_x": centroid_x, "centroid_y": centroid_y,
+            "spread_x": spread_x, "spread_y": spread_y,
+            
+            "progress": progress, 
+            "time_from_start": time_from_start,
+            
+            "compactness": compactness,
+            "aspect_ratio": aspect_ratio
         }
 
-    def _gesture_to_sequence(self, gesture):
-        frames = gesture.get("frames",[]) or []
-        all_x = [p["x"] for f in frames for p in f.get("points",[])]
-        all_y = [p["y"] for f in frames for p in f.get("points",[])]
-        centroid = np.array([float(np.mean(all_x)) if all_x else 0.0,
-                             float(np.mean(all_y)) if all_y else 0.0], dtype=np.float32)
+    def _gesture_to_sequence(self, gesture: Dict) -> np.ndarray:
+        """تحويل الإيماءة إلى تسلسل ميزات"""
+        frames = gesture.get("frames", [])
+        if not frames:
+            return np.zeros((self.max_timesteps, len(self.per_frame_names)), dtype=np.float32)
 
-        seq_features = []
+        all_x = [p["x"] for f in frames for p in f.get("points", [])]
+        all_y = [p["y"] for f in frames for p in f.get("points", [])]
+        global_centroid = np.array([
+            float(np.mean(all_x)) if all_x else 0.0,
+            float(np.mean(all_y)) if all_y else 0.0
+        ])
+
+        start_time = frames[0].get("timestamp", 0)
+
+        feature_buffer = []
+        prev_frame = None
         prev_velocity = None
-        cumulative_dist = 0.0
+        cumulative_length = 0.0
 
-        for i, frame in enumerate(frames):
-            prev_frame = frames[i-1] if i>0 else None
-            feat_dict = self._extract_frame_features(frame, prev_frame, prev_velocity, cumulative_dist, centroid)
-            prev_velocity = np.array([feat_dict["vx"], feat_dict["vy"]], dtype=np.float32)
-            cumulative_dist = feat_dict["cumulative_distance"]
-            seq_features.append([feat_dict[name] for name in self.per_frame_names])
+        for frame in frames:
+            features = self._extract_optimized_features(
+                frame=frame,
+                prev_frame=prev_frame,
+                prev_velocity=prev_velocity,
+                cumulative_length=cumulative_length,
+                start_time=start_time,
+                global_centroid=global_centroid
+            )
+            
+            if prev_frame is not None:
+                cumulative_length = features["progress"]
+            
+            prev_velocity = np.array([0.0, 0.0])
+            prev_frame = frame
+            feature_buffer.append(features)
 
-        seq_features = np.array(seq_features, dtype=np.float32)
-        T,D = seq_features.shape
+        total_length = cumulative_length if cumulative_length > 0 else 1.0
+        for features in feature_buffer:
+            features["progress"] = features["progress"] / total_length
 
-        # padding / resampling
+        sequence_array = np.array([
+            [features[name] for name in self.per_frame_names] 
+            for features in feature_buffer
+        ], dtype=np.float32)
+
+        T, D = sequence_array.shape
+
         if T >= self.max_timesteps:
-            idx = np.linspace(0, T-1, self.max_timesteps).astype(int)
-            seq_features_fixed = seq_features[idx]
+            indices = np.linspace(0, T - 1, self.max_timesteps).astype(int)
+            sequence_array = sequence_array[indices]
         else:
-            pad_needed = self.max_timesteps - T
-            seq_features_fixed = np.vstack([seq_features, np.zeros((pad_needed,D),dtype=np.float32)])
+            padding = np.zeros((self.max_timesteps - T, D), dtype=np.float32)
+            sequence_array = np.vstack([sequence_array, padding])
 
-        return seq_features_fixed
+        return sequence_array
 
-    def save_gestures_to_csv(self, gestures: List[Dict[str,Any]], out_csv:str="ai_model/ADVANCED_features.csv"):
+    def gesture_to_full_feature_vector(self, gesture: Dict) -> np.ndarray:
+        return self._gesture_to_sequence(gesture)
+
+    def save_gestures_to_csv(self, gestures: List[Dict[str, Any]], 
+                           out_csv: str = "ai_model/ADVANCED_features.csv"):
         if not gestures:
             print("❌ No gestures to process.")
             return
+            
+        print(f"📊 Processing {len(gestures)} gestures for feature extraction...")
+        
         with open(out_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            # header
-            header = ["gesture_id","character"] + self.per_frame_names
+            header = ["gesture_id", "character"] + self.per_frame_names
             writer.writerow(header)
-            for g in gestures:
-                seq = self._gesture_to_sequence(g)
-                mean_features = np.mean(seq, axis=0).tolist()
-                writer.writerow([g.get("id",0), g.get("character")] + mean_features)
-        print(f"✅ Saved advanced features to {out_csv}")
+            
+            successful = 0
+            for i, gesture in enumerate(gestures):
+                try:
+                    sequence = self.gesture_to_full_feature_vector(gesture)
+                    mean_features = np.mean(sequence, axis=0).tolist()
+                    
+                    writer.writerow([
+                        gesture.get("id", f"unknown_{i}"),
+                        gesture.get("character", "unknown")
+                    ] + mean_features)
+                    
+                    successful += 1
+                    
+                    if self.verbose and (i + 1) % 50 == 0:
+                        print(f"✅ Processed {i + 1}/{len(gestures)} gestures")
+                        
+                except Exception as e:
+                    print(f"⚠️ Error processing gesture {gesture.get('id')}: {e}")
+                    continue
+        
+        print(f"🎉 Saved features for {successful}/{len(gestures)} gestures to {out_csv}")
 
-    def plot_feature_variance(self, gestures: List[Dict[str,Any]], top_n: int = None):
-        """
-        تحسب التباين لكل ميزة وترسمها في رسم بياني واحد
-        """
+    def get_feature_names(self) -> List[str]:
+        return self.per_frame_names
+
+    def get_feature_dimension(self) -> int:
+        return len(self.per_frame_names)
+
+    # -----------------------------------------------------------
+    # 🌟 دالة تحليل تباين الميزات  (NEW)
+    # -----------------------------------------------------------
+    def plot_feature_variance(self, gestures: List[Dict]):
+        """حساب ورسم تباين كل ميزة عبر جميع الإيماءات"""
         if not gestures:
-            print("❌ No gestures to process for plotting.")
+            print("❌ No gestures provided for variance plot")
             return
 
-        # اجمع كل seq_features لكل gesture
-        all_features = []
+        all_sequences = []
         for g in gestures:
-            seq = self._gesture_to_sequence(g)
-            mean_feat = np.mean(seq, axis=0)
-            all_features.append(mean_feat)
-        all_features = np.array(all_features)
+            try:
+                seq = self.gesture_to_full_feature_vector(g)
+                all_sequences.append(seq)
+            except Exception:
+                continue
 
-        feature_variance = np.var(all_features, axis=0)
-        feature_names = self.per_frame_names
+        if not all_sequences:
+            print("❌ No valid sequences extracted")
+            return
 
-        if top_n is not None and top_n < len(feature_names):
-            idx = np.argsort(feature_variance)[-top_n:]
-            feature_variance = feature_variance[idx]
-            feature_names = [feature_names[i] for i in idx]
+        all_sequences = np.array(all_sequences)   # (N, T, D)
+        flattened = all_sequences.reshape(-1, all_sequences.shape[-1])
 
-        plt.figure(figsize=(12,6))
-        plt.bar(feature_names, feature_variance, color="skyblue")
+        variances = np.var(flattened, axis=0)
+
+        plt.figure(figsize=(12, 4))
+        plt.bar(self.per_frame_names, variances)
         plt.xticks(rotation=45, ha="right")
-        plt.ylabel("Feature Variance")
-        plt.title("Feature Variance Across Gestures (Low variance = possible noise)")
+        plt.title("Feature Variance Across All Samples")
         plt.tight_layout()
         plt.show()

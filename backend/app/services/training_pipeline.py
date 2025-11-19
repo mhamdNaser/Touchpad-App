@@ -3,11 +3,13 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv1D, MaxPooling1D, GlobalAveragePooling1D, Dense, Dropout, BatchNormalization, LSTM
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
+
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.model_selection import train_test_split
@@ -16,47 +18,18 @@ from sklearn.metrics import classification_report, confusion_matrix
 from app.services.gesture_data_loader import GestureDataLoader
 from app.services.advanced_feature_extractor import AdvancedFeatureExtractor
 
+
 class TrainingPipeline:
     def __init__(self, max_timesteps:int=200, verbose:bool=True):
         self.data_loader = GestureDataLoader()
         self.feature_extractor = AdvancedFeatureExtractor(max_timesteps=max_timesteps)
+
         self.max_timesteps = max_timesteps
         self.label_encoder = LabelEncoder()
         self.verbose = verbose
-        # فولدر التخزين
+
         self.output_dir = "ai_model"
         os.makedirs(self.output_dir, exist_ok=True)
-
-    def build_model(self, input_shape, num_classes):
-        model = Sequential([
-            Conv1D(64, 5, activation='relu', padding='same', input_shape=input_shape),
-            BatchNormalization(),
-            MaxPooling1D(2),
-            Dropout(0.2),
-
-            Conv1D(128, 5, activation='relu', padding='same'),
-            BatchNormalization(),
-            MaxPooling1D(2),
-            Dropout(0.3),
-
-            Conv1D(256, 3, activation='relu', padding='same'),
-            BatchNormalization(),
-
-            LSTM(128, return_sequences=False),
-            Dropout(0.3),
-
-            Dense(128, activation='relu'),
-            Dropout(0.4),
-            Dense(64, activation='relu'),
-            Dropout(0.3),
-            Dense(num_classes, activation='softmax')
-        ])
-        model.compile(
-            loss='categorical_crossentropy',
-            optimizer=Adam(0.0005),
-            metrics=['accuracy']
-        )
-        return model
 
     def plot_training_history(self, history):
         plt.figure(figsize=(12,5))
@@ -99,20 +72,61 @@ class TrainingPipeline:
         plt.close()
         print("💾 Saved confusion matrix in ai_model/confusion_matrix.png")
 
+    def build_model(self, input_shape, num_classes):
+        model = Sequential([
+            Conv1D(64, 5, activation='relu', padding='same', input_shape=input_shape),
+            BatchNormalization(),
+            MaxPooling1D(2),
+            Dropout(0.2),
+
+            Conv1D(128, 5, activation='relu', padding='same'),
+            BatchNormalization(),
+            MaxPooling1D(2),
+            Dropout(0.3),
+
+            Conv1D(256, 3, activation='relu', padding='same'),
+            BatchNormalization(),
+
+            LSTM(128, return_sequences=False),
+            Dropout(0.3),
+
+            Dense(128, activation='relu'),
+            Dropout(0.4),
+
+            Dense(64, activation='relu'),
+            Dropout(0.3),
+
+            Dense(num_classes, activation='softmax')
+        ])
+
+        model.compile(
+            loss='categorical_crossentropy',
+            optimizer=Adam(0.0005),
+            metrics=['accuracy']
+        )
+
+        return model
+
     def train_model(self):
         print("🚀 Starting improved training pipeline...")
         gestures = self.data_loader.load_all_gestures()
+
         if len(gestures) == 0:
             raise ValueError("❌ No gestures loaded")
 
+        # -------------------------
+        # 🔥 استخراج الميزات المدمجة
+        # -------------------------
         X, y = [], []
         for g in gestures:
-            X.append(self.feature_extractor._gesture_to_sequence(g))
-            y.append(g['character'])
+            seq = self.feature_extractor.gesture_to_full_feature_vector(g)
+            X.append(seq)
+            y.append(g["character"])
 
         X = np.array(X, dtype=np.float32)
         y = np.array(y)
 
+        # Encode labels
         y_encoded = self.label_encoder.fit_transform(y)
         num_classes = len(self.label_encoder.classes_)
 
@@ -132,49 +146,44 @@ class TrainingPipeline:
         input_shape = (X_train.shape[1], X_train.shape[2])
         model = self.build_model(input_shape, num_classes)
 
+        batch_size = max(min(32, len(X_train)//4), 8)
+
         early_stop = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True, verbose=1)
-        checkpoint = ModelCheckpoint(os.path.join(self.output_dir, 'arabic_gesture_cnn_lstm_best.keras'),
-                                     monitor='val_accuracy', save_best_only=True, verbose=1)
+        checkpoint = ModelCheckpoint(
+            os.path.join(self.output_dir, 'best_model.keras'),
+            monitor='val_accuracy', save_best_only=True, verbose=1
+        )
         reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=1e-7, verbose=1)
 
-        batch_size = max(min(32, len(X_train)//4), 8)
         history = model.fit(
             X_train, y_train_cat,
             validation_split=0.2,
-            epochs=100,
+            epochs=70,
             batch_size=batch_size,
             callbacks=[early_stop, checkpoint, reduce_lr],
             class_weight=class_weights,
             verbose=1
         )
 
-        # رسم شارتات التدريب
         self.plot_training_history(history)
 
-        # تقييم النموذج على الاختبار
-        test_loss, test_acc = model.evaluate(X_test, y_test_cat, verbose=0)
-        y_pred_proba = model.predict(X_test, verbose=0)
-        y_pred = np.argmax(y_pred_proba, axis=1)
+        # Evaluate
+        y_pred_prob = model.predict(X_test)
+        y_pred = np.argmax(y_pred_prob, axis=1)
 
         print(classification_report(y_test, y_pred, target_names=self.label_encoder.classes_, zero_division=0))
 
-        # رسم Confusion Matrix وحفظها
         cm = self.plot_confusion_matrix(y_test, y_pred)
         print("Confusion Matrix:\n", cm)
 
-        # حفظ النموذج والبيانات
-        model.save(os.path.join(self.output_dir, "arabic_gesture_cnn_lstm_final.keras"), save_format='keras')
-        with open(os.path.join(self.output_dir, "label_encoder.pkl"), "wb") as f: pickle.dump(self.label_encoder, f)
-        with open(os.path.join(self.output_dir, "X_test.pkl"), "wb") as f: pickle.dump(X_test, f)
-        with open(os.path.join(self.output_dir, "y_test.pkl"), "wb") as f: pickle.dump(y_test, f)
-
-        print("💾 Saved improved model, label encoder, test data, and plots in ai_model/")
+        # Save model + label encoder
+        model.save(os.path.join(self.output_dir, "final_model.keras"))
+        with open(os.path.join(self.output_dir, "label_encoder.pkl"), "wb") as f:
+            pickle.dump(self.label_encoder, f)
 
         return {
-            'model': model,
-            'history': history,
-            'test_accuracy': float(test_acc),
-            'test_loss': float(test_loss),
-            'predictions': {'y_true': y_test, 'y_pred': y_pred, 'y_pred_proba': y_pred_proba},
-            'confusion_matrix': cm
+            "test_accuracy": float(np.mean(y_pred == y_test)),
+            "model": model,
+            "y_pred": y_pred,
+            "y_true": y_test
         }

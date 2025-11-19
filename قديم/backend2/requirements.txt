@@ -1,0 +1,64 @@
+# main library for FastApi run command line ' pip install '
+
+fastapi 
+uvicorn[standard] 
+sqlalchemy 
+pydantic 
+email-validator 
+python-multipart
+python-dotenv
+
+# main library for AI run command line ' pip install '
+
+torch 
+transformers 
+scikit-learn 
+numpy
+matplotlib
+pandas
+tensorflow
+seaborn
+
+# main library for Database run command line ' pip install '
+sqlalchemy 
+pymysql 
+mysqlclient
+
+
+requests
+joblib
+tqdm
+
+
+
+###########################################
+##  Activate a virtual work environment  ##
+###########################################
+
+###### in backend directory run this command line to creat environment and run 
+
+python -m venv venv
+venv\Scripts\activate
+
+###### to run FastApi server 
+
+uvicorn main:app --reload
+
+
+###### to run training or testing from main file 
+
+python -m app.train_main train
+python -m app.train_main analyze
+
+
+python feature_analysis.py
+
+
+pip install fastapi uvicorn[standard] sqlalchemy pydantic email-validator python-multipart python-dotenv
+pip install seaborn torch transformers scikit-learn numpy  tensorflow matplotlib pandas
+pip install sqlalchemy pymysql mysqlclient
+
+# for clustring model 
+pip install requests joblib tqdm
+
+python -m scripts.train_pipeline
