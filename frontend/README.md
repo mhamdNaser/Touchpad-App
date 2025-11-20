@@ -1,10 +1,8 @@
 # React + Vite
 
-// "scripts": {
-// "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-// "build": "vite build",
-// "dist": "npm run build && electron-builder"
-// },
+
+cd C:\Users\black\OneDrive\Desktop\touchpad-app\electron
+
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

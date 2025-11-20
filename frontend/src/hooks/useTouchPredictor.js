@@ -6,7 +6,9 @@ export default function useTouchSimulator(
   canvasRef,
   previewCanvasRef,
   selectedGesture,
-  penColor
+  penColor,
+  setPredictionLetter,
+  setTopPredictions
 ) {
   const DEFAULT_ENDPOINT = "http://localhost:8000/api/gestures/predict";
 
@@ -44,29 +46,29 @@ export default function useTouchSimulator(
 
       return p
         ? {
-            id: p.id,
-            x: parseFloat(p.x.toFixed(4)),
-            y: parseFloat(p.y.toFixed(4)),
-            state: p.state || "move",
-            pressure: p.pressure || 1.0,
-            dx: parseFloat(dx.toFixed(4)),
-            dy: parseFloat(dy.toFixed(4)),
-            vx: parseFloat(vx.toFixed(4)),
-            vy: parseFloat(vy.toFixed(4)),
-            angle: parseFloat(angle.toFixed(4)),
-          }
+          id: p.id,
+          x: parseFloat(p.x.toFixed(4)),
+          y: parseFloat(p.y.toFixed(4)),
+          state: p.state || "move",
+          pressure: p.pressure || 1.0,
+          dx: parseFloat(dx.toFixed(4)),
+          dy: parseFloat(dy.toFixed(4)),
+          vx: parseFloat(vx.toFixed(4)),
+          vy: parseFloat(vy.toFixed(4)),
+          angle: parseFloat(angle.toFixed(4)),
+        }
         : {
-            id: i + 1,
-            x: 0,
-            y: 0,
-            state: "none",
-            pressure: 0,
-            dx: 0,
-            dy: 0,
-            vx: 0,
-            vy: 0,
-            angle: 0,
-          };
+          id: i + 1,
+          x: 0,
+          y: 0,
+          state: "none",
+          pressure: 0,
+          dx: 0,
+          dy: 0,
+          vx: 0,
+          vy: 0,
+          angle: 0,
+        };
     });
 
     return { ts, delta_ms, frame_id: ts, points };
@@ -77,7 +79,8 @@ export default function useTouchSimulator(
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-
+    setPredictionLetter(null);
+    setTopPredictions([]);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     activePathsRef.current.clear();
     completedPathsRef.current = [];
@@ -217,13 +220,17 @@ export default function useTouchSimulator(
     setPayloadPreview(payload);
 
     try {
-      await axios.post(DEFAULT_ENDPOINT, payload, {
+      const res = await axios.post(DEFAULT_ENDPOINT, payload, {
         headers: { "Content-Type": "application/json" },
       });
       toast.success("Gesture sent successfully");
+      setPredictionLetter(res.data.predicted_letter);
+      setTopPredictions(res.data.top_predictions);
     } catch (err) {
       toast.error("Failed to send gesture");
     }
+
+
 
     gestureFrames.current = [];
   };

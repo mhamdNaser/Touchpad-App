@@ -10,7 +10,7 @@ export default function Header() {
       <div className="flex justify-between items-center w-full text-white">
         <div className="flex gap-3">
           <img
-            src="/images/favicon.png"
+            src="./favicon.png"
             alt="Logo"
             className="max-h-10 lg:max-h-12 object-contain"
           />

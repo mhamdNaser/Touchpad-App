@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import useTouchPredictor from "./hooks/useTouchPredictor"; // تأكد من المسار الصحيح
-import Button from "./Components/Button";
+import Button from "./components/Button";
 import Header from "./components/Header";
 import {
   MdFullscreenExit,
@@ -17,6 +17,8 @@ export default function DrowerLayout() {
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [penColor, setPenColor] = useState("#000000");
   const [bgColor, setBgColor] = useState("#ffffff");
+  const [predictionLetter, setPredictionLetter] = useState(null);
+  const [topPredictions, setTopPredictions] = useState([]);
 
   const canvasRef = useRef();
   const previewCanvasRef = useRef();
@@ -26,7 +28,9 @@ export default function DrowerLayout() {
     canvasRef,
     previewCanvasRef,
     null, // لا حرف محدد - رسم حر
-    penColor
+    penColor,
+    setPredictionLetter,
+    setTopPredictions
   );
 
   const toggleFullScreen = () => {
@@ -57,23 +61,22 @@ export default function DrowerLayout() {
       <Header />
       <div
         ref={containerRef}
-        className={`${
-          isFullScreen
-            ? "fixed inset-0 z-[100] flex items-center justify-center bg-gray-900 p-0 transition-all duration-300"
-            : "flex flex-col lg:flex-row gap-4 p-4 items-start justify-center w-full"
-        }`}
+        className={`${isFullScreen
+          ? "fixed inset-0 z-[100] flex items-center justify-center bg-gray-900 p-0 transition-all duration-300"
+          : "flex flex-col lg:flex-row gap-4 p-4 items-start justify-center w-full"
+          }`}
       >
         {/* Thin Sidebar */}
         {!isFullScreen && (
           <div className="flex flex-col gap-4 w-full lg:w-[80px] bg-white/95 backdrop-blur-sm p-4 rounded-2xl shadow-xl border border-indigo-100 transition-all duration-300">
-            
+
             {/* Pen Color Section */}
             <div className="space-y-3 text-center">
               <div className="flex flex-col items-center gap-2">
                 <MdPalette className="text-indigo-500 text-xl" />
                 <span className="text-xs font-semibold text-gray-700">القلم</span>
               </div>
-              
+
               <input
                 type="color"
                 value={penColor}
@@ -89,7 +92,7 @@ export default function DrowerLayout() {
                 <MdFormatColorFill className="text-indigo-500 text-xl" />
                 <span className="text-xs font-semibold text-gray-700">الخلفية</span>
               </div>
-              
+
               <input
                 type="color"
                 value={bgColor}
@@ -111,7 +114,7 @@ export default function DrowerLayout() {
               >
                 <MdSave size={18} />
               </button>
-              
+
               <button
                 className="bg-gray-600 p-2 flex items-center gap-1 rounded-xl text-white hover:bg-gray-700 shadow-lg transition-all duration-300"
                 onClick={handleClearCanvas} // استخدام الدالة المحسنة
@@ -133,18 +136,16 @@ export default function DrowerLayout() {
 
         {/* Canvas Area */}
         <div
-          className={`${
-            isFullScreen
-              ? "w-full h-full p-0 transition-all duration-300 relative"
-              : "w-full flex justify-center relative min-w-[300px] lg:flex-1"
-          }`}
+          className={`${isFullScreen
+            ? "w-full h-full p-0 transition-all duration-300 relative"
+            : "w-full flex justify-center relative min-w-[300px] lg:flex-1"
+            }`}
         >
           <div
-            className={`${
-              isFullScreen
-                ? "w-full h-full bg-white shadow-none rounded-none"
-                : "bg-white border border-gray-300 rounded-2xl shadow-xl overflow-hidden max-w-full"
-            } relative`}
+            className={`${isFullScreen
+              ? "w-full h-full bg-white shadow-none rounded-none"
+              : "bg-white border border-gray-300 rounded-2xl shadow-xl overflow-hidden max-w-full"
+              } relative`}
           >
             {!isFullScreen && (
               <button
@@ -155,6 +156,36 @@ export default function DrowerLayout() {
                 <MdFullscreenExit size={20} className="rotate-45" />
               </button>
             )}
+
+            <div className="absolute top-2 left-2 flex flex-col gap-2 z-10">
+
+              {/* المربع الكبير */}
+              <div className="h-40 w-40 bg-neutral-700 text-white rounded-lg flex items-center justify-center shadow-lg">
+                {predictionLetter ? (
+                  <span className="text-8xl">{predictionLetter}</span>
+                ) : (
+                  <div className="text-sm">لا توجد توقعات بعد</div>
+                )}
+              </div>
+
+              {/* صف التوقعات – نفس عرض الكبير */}
+              <div className="w-40 flex gap-2">
+                {topPredictions.slice(0, 3).map((pred, idx) => (
+                  <div
+                    key={idx}
+                    className="flex-1 h-16 bg-neutral-800 rounded-lg shadow-md flex flex-col items-center justify-center text-white"
+                  >
+                    <span className="text-xl">{pred.letter}</span>
+                    <span className="text-[10px] opacity-80">
+                      {(pred.probability * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+            </div>
+
+
 
             <canvas
               ref={canvasRef}
