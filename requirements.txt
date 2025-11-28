@@ -1,0 +1,17 @@
+fastapi 
+uvicorn[standard] 
+sqlalchemy 
+pydantic 
+email-validator 
+python-multipart
+python-dotenv
+torch 
+transformers 
+scikit-learn 
+numpy
+matplotlib
+pandas
+tensorflow
+seaborn
+pymysql 
+mysqlclient
